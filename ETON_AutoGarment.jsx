@@ -13,16 +13,27 @@ app.displayDialogs = DialogModes.NO;
 
 // VARIABLES
 
-var lyr_GrpSamplesGarm;
-var minimumFilter = 200;
-var samplesArray = [];
+var lyr_GrpSamplesGarm, lyr_SamplerCheck, lyr_FillAuto;
+var minimumFilter = 50;
+var samplesArrayRGB = [];
+var samplesArrayBrightness = [];
 var samplesRef = [];
+var samplesRefBrightness = [];
 var samplesGarm = [];
+var samplesGarmBrightness = [];
+var spanWeight = [];
 var grp_Garment;
 var grp_Ref;
 var cleanRGB;
-var gradientSteps = 4;
+var gradientSteps = 4; // Max 5
 var blendIfSpan = Math.round(255 / gradientSteps);
+var brightnessSteps = 1; // Max 3 (Max 1 atm bcuz tricky..)
+var blendIfSpanBrightness = Math.round(255 / brightnessSteps);
+var brightnessBlendCap = 0;
+var garmentSize; // 0.0-1.0 - If 0.0 then garment bounds fill the whole canvas
+
+var troubleshoot = true;
+var showEndMatchRef = true;
 
 try {
     init();
@@ -55,6 +66,14 @@ function init() {
             grp_Garment.layers[i].visible = false;
         }
     }
+
+    activeDocument.activeLayer = grp_Garment;
+    selectionFromMask();
+    var pixelsWidth = activeDocument.selection.bounds[2].value - activeDocument.selection.bounds[0].value;
+    var pixelsHeight = activeDocument.selection.bounds[3].value - activeDocument.selection.bounds[1].value;
+    var pixelsArea = pixelsWidth * pixelsHeight;
+    garmentSize = 1 - (pixelsArea / (activeDocument.width.value * activeDocument.height.value));
+    activeDocument.selection.deselect();
     
     main();
 
@@ -62,16 +81,22 @@ function init() {
 
 function main() {
 
-    // ----- Auto ref -----
+    ///////////////////////////
+    ///////// CUTOUTS /////////
+    ///////////////////////////
+    
+    // ----- Create cutout for ref -----
     grp_Ref.visible = true;
     activeDocument.activeLayer = grp_Ref.layers[0];
     activeDocument.activeLayer.visible = true;
-    var lyrHeightInPt = activeDocument.activeLayer.bounds[3].as('pt') - activeDocument.activeLayer.bounds[0].as('pt');
+    var lyrHeightInPt = activeDocument.activeLayer.bounds[3].as('pt') - activeDocument.activeLayer.bounds[1].as('pt');
+    var lyrWidthInPt = activeDocument.activeLayer.bounds[2].as('pt') - activeDocument.activeLayer.bounds[0].as('pt');
         
     // Select Subject
     selectSubject(false);
     activeDocument.selection.contract(new UnitValue (30, "px"));
     makePointSelection([[0, 0],[activeDocument.width.as('pt'), 0],[activeDocument.width.as('pt'), lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')], [0, lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')]], 0, SelectionType.DIMINISH);
+    makePointSelection([[0, ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[0].as('pt'), ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[1].as('pt'), activeDocument.height.as('pt')], [0, activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
     activeDocument.selection.copy();
     grp_Ref.visible = false;
     var lyr_MatchGrp = activeDocument.layerSets.add();
@@ -79,35 +104,15 @@ function main() {
     var lyr_AutoRef = activeDocument.paste();
     activeDocument.activeLayer.name = "Auto - Ref";
     alignCenter();
-    var lyr_FillAuto = fillSolidColour(0, 0, 0);
+    lyr_AutoRef.visible = false;
+    lyr_FillAuto = fillSolidColour(0, 0, 0);
     moveLayerUpOrDown("Down");
 
-    // Get brightness sample for Ref
-    activeDocument.activeLayer = lyr_AutoRef;
-    var preBlendIf = app.activeDocument.activeHistoryState;
-    layerSelection();
-    var idAvrg = charIDToTypeID( "Avrg" );
-    executeAction( idAvrg, undefined, DialogModes.NO );
-    activeDocument.selection.deselect();
-    lyr_AutoRef.desaturate();
-    getSample();
-    var refBrightness = cleanRGB;
-    app.activeDocument.activeHistoryState = preBlendIf;
-
-    // Get RGB samples for Ref
-    for (i = 0; i < gradientSteps; i++) {
-        activeDocument.activeLayer = lyr_AutoRef;
-        var preBlendIf = app.activeDocument.activeHistoryState;
-        samplesRef.push(averageBlendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
-        app.activeDocument.activeHistoryState = preBlendIf;
-    }
-
-    lyr_AutoRef.remove();
-
-    // ----- Auto garment -----
+    // ----- Create cutout for garment -----
     activeDocument.activeLayer = grp_Garment;
-
-    // Selection from mask
+    var garmentMaskFeather = grp_Garment.filterMaskFeather;
+    grp_Garment.filterMaskFeather = 0.0;
+    // Selection from garment mask
     selectionFromMask();
     activeDocument.selection.contract(new UnitValue (30, "px"));
     activeDocument.activeLayer = lyr_FillAuto;
@@ -115,32 +120,165 @@ function main() {
     activeDocument.selection.copy(true);
     lyr_FillAuto.visible = true;
     var lyr_AutoGarm = activeDocument.paste();
+    activeDocument.activeLayer.name = "Auto - Garment";
     alignCenter();
 
+    ///////////////////////////////////////
+    ///////// SAMPLE - BRIGHTNESS /////////
+    ///////////////////////////////////////
+
+    lyr_SamplerCheck = activeDocument.artLayers.add();
+    lyr_SamplerCheck.name = "Sampler Check";
+
+    // Get brightness sample for Ref
+    lyr_AutoGarm.visible = false;
+    lyr_AutoRef.visible = true;
+    // Set brightness cap
+    activeDocument.activeLayer = lyr_AutoRef;
+    var preBrightnessCap = app.activeDocument.activeHistoryState;
+    createVibrance();
+    adjustVibrance(-100);
+    activeDocument.activeLayer.merge();
+    brightnessBlendCap = (averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255])[0]) - 40;
+    if (brightnessBlendCap < 0) brightnessBlendCap = 0;
+    app.activeDocument.activeHistoryState = preBrightnessCap;
+
+    for (i = 0; i < brightnessSteps; i++) {
+        activeDocument.activeLayer = lyr_AutoRef;
+        var preBlendIf = app.activeDocument.activeHistoryState;
+        createVibrance();
+        adjustVibrance(-100);
+        activeDocument.activeLayer.merge();
+        samplesRefBrightness.push(averageBlendIf([brightnessBlendCap, brightnessBlendCap], [255, 255], [0, 0], [255, 255]));
+        app.activeDocument.activeHistoryState = preBlendIf;
+    }
+
     // Get brightness sample for Garm
-    activeDocument.activeLayer = lyr_AutoGarm;
-    var preBlendIf = app.activeDocument.activeHistoryState;
-    layerSelection();
-    var idAvrg = charIDToTypeID( "Avrg" );
-    executeAction( idAvrg, undefined, DialogModes.NO );
-    activeDocument.selection.deselect();
-    lyr_AutoGarm.desaturate();
-    getSample();
-    var garmBrightness = cleanRGB;
-    app.activeDocument.activeHistoryState = preBlendIf;
+    lyr_AutoRef.visible = false;
+    lyr_AutoGarm.visible = true;
+    for (i = 0; i < brightnessSteps; i++) {
+        activeDocument.activeLayer = lyr_AutoGarm;
+        var preBlendIf = app.activeDocument.activeHistoryState;
+        createVibrance();
+        adjustVibrance(-100);
+        activeDocument.activeLayer.merge();
+        samplesGarmBrightness.push(averageBlendIf([brightnessBlendCap, brightnessBlendCap], [255, 255], [0, 0], [255, 255]));
+        if (samplesGarmBrightness[i][0] == 0 && samplesGarmBrightness[i][1] == 0 && samplesGarmBrightness[i][2] == 0) samplesGarmBrightness[i] = samplesRefBrightness[i];
+        app.activeDocument.activeHistoryState = preBlendIf;
+    }
+
+    /////////////////////////////////////////
+    ///////// SWATCHES - BRIGHTNESS /////////
+    /////////////////////////////////////////
+
+    var currentRulerUnits = app.preferences.rulerUnits;
+    var currentTypeUnits = app.preferences.typeUnits;
+    var currentDisplayDialogs = app.displayDialogs;
+
+    app.preferences.rulerUnits = Units.POINTS;
+    app.preferences.typeUnits = TypeUnits.POINTS;
+    app.displayDialogs = DialogModes.NO;
+    
+    // Brightness swatches for garment
+    lyr_GrpSamplesGarm = activeDocument.layerSets.add();
+    lyr_GrpSamplesGarm.name = "Auto - Samples Garment";
+    var sampleSize = 10;
+    var sampleStartX = 0;
+    var sampleStartY = 0;
+    for (i = 0; i < brightnessSteps; i++) {
+        createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], samplesGarmBrightness[i]);
+        sampleStartY = sampleStartY + sampleSize;
+    }
+
+    // Brightness swatches for ref
+    activeDocument.activeLayer = grp_Ref;
+    var lyr_GrpSamplesRef = activeDocument.layerSets.add();
+    lyr_GrpSamplesRef.name = "Auto - Samples Reference";
+    var sampleStartX = 10;
+    var sampleStartY = 0;
+    for (i = 0; i < brightnessSteps; i++) {
+        createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], samplesRefBrightness[i]);
+        sampleStartY = sampleStartY + sampleSize;
+    }
+
+    lyr_SamplerCheck.move(activeDocument.layers[0], ElementPlacement.PLACEBEFORE);
+
+    ///////////////////////////////////////
+    ///////// ADJUSTMENT - CURVES /////////
+    ///////////////////////////////////////
+
+    // Create curves adjustment layer
+    activeDocument.activeLayer = lyr_GrpSamplesGarm;
+    createCurves();
+    var lyr_Curves = activeDocument.activeLayer;
+    lyr_Curves.name = "Garment brightness";
+    deleteMask();
+    lyr_GrpSamplesGarm.artLayers.add();
+    var lyr_UnderCurves = activeDocument.activeLayer;
+    moveLayerUpOrDown("Down");
+
+    app.refresh();
+
+    // Adjust curves
+    activeDocument.activeLayer = lyr_GrpSamplesGarm;
+    for (i = 0; i < brightnessSteps; i++) {
+        adjustCurvesToMatch(lyr_Curves, samplesArrayBrightness[i], samplesArrayBrightness[samplesArrayBrightness.length / 2 + i]);
+    }
+
+    activeDocument.colorSamplers.removeAll();
+    
+    app.preferences.rulerUnits = currentRulerUnits;
+    app.preferences.typeUnits = currentTypeUnits;
+    app.displayDialogs = currentDisplayDialogs;
+    
+    ////////////////////////////////
+    ///////// SAMPLE - RGB /////////
+    ////////////////////////////////
+
+    // Get RGB samples for Ref
+    lyr_AutoGarm.visible = false;
+    lyr_AutoRef.visible = true;
+    lyr_Curves.visible = false;
+    for (i = 0; i < gradientSteps; i++) {
+        activeDocument.activeLayer = lyr_AutoRef;
+        var preBlendIf = app.activeDocument.activeHistoryState;
+        samplesRef.push(averageBlendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        app.activeDocument.activeHistoryState = preBlendIf;
+    }
 
     // Get RGB samples for Garm
+    lyr_AutoRef.visible = false;
+    lyr_AutoGarm.visible = true;
+
+    // Create curved garment
+    var lyr_tempCurves = lyr_Curves.duplicate(lyr_AutoGarm, ElementPlacement.PLACEBEFORE);
+    lyr_tempCurves.visible = true;
+    var grp_Temp = activeDocument.layerSets.add();
+    grp_Temp.move(lyr_tempCurves, ElementPlacement.PLACEBEFORE);
+    lyr_AutoGarm.duplicate(grp_Temp, ElementPlacement.INSIDE);
+    lyr_tempCurves.move(grp_Temp, ElementPlacement.INSIDE);
+    activeDocument.activeLayer = grp_Temp;
+    grp_Temp.merge();
+    var lyr_AutoGarmTemp = activeDocument.activeLayer;
+    lyr_AutoGarm.visible = false;
+    
     for (i = 0; i < gradientSteps; i++) {
-        activeDocument.activeLayer = lyr_AutoGarm;
+        activeDocument.activeLayer = lyr_AutoGarmTemp;
+        var preGetWeight = app.activeDocument.activeHistoryState;
+        spanWeight.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        app.activeDocument.activeHistoryState = preGetWeight;
         var preBlendIf = app.activeDocument.activeHistoryState;
         samplesGarm.push(averageBlendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
         app.activeDocument.activeHistoryState = preBlendIf;
     }
 
-    lyr_AutoGarm.remove();
     lyr_MatchGrp.remove();
+    grp_Garment.filterMaskFeather = garmentMaskFeather;
 
-    // Create samples for garment
+    //////////////////////////////////
+    ///////// SWATCHES - RGB /////////
+    //////////////////////////////////
+
     var currentRulerUnits = app.preferences.rulerUnits;
     var currentTypeUnits = app.preferences.typeUnits;
     var currentDisplayDialogs = app.displayDialogs;
@@ -149,36 +287,20 @@ function main() {
     app.preferences.typeUnits = TypeUnits.POINTS;
     app.displayDialogs = DialogModes.NO;
 
-    activeDocument.activeLayer = grp_Garment;
-    lyr_GrpSamplesGarm = activeDocument.layerSets.add();
-    lyr_GrpSamplesGarm.name = "Auto - Samples Garment";
-    var sampleSize = 10;
+    // RGB swatches for garment
+    activeDocument.activeLayer = lyr_UnderCurves;
     var sampleStartX = 0;
-    var sampleStartY = 0;
-
-    // Sample for brightness
-    createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], garmBrightness);
-    sampleStartY = sampleStartY + sampleSize;
-    // Sample for RGB
     for (i = 0; i < gradientSteps; i++) {
-        createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], samplesGarm[i]);
+        createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], samplesGarm[i], "rgb");
         sampleStartY = sampleStartY + sampleSize;
     }
 
-    // Create samples for ref
-    activeDocument.activeLayer = grp_Ref;
-    var lyr_GrpSamplesRef = activeDocument.layerSets.add();
-    lyr_GrpSamplesRef.name = "Auto - Samples Reference";
-    var sampleSize = 10;
+    // RGB swatches for ref
+    activeDocument.activeLayer = lyr_GrpSamplesRef;
     var sampleStartX = 10;
-    var sampleStartY = 0;
-
-    // Sample for brightness
-    createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], refBrightness);
-    sampleStartY = sampleStartY + sampleSize;
-    // Sample for RGB
+    var sampleStartY = sampleSize * brightnessSteps;
     for (i = 0; i < gradientSteps; i++) {
-        createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], samplesRef[i]);
+        createSamples([[sampleStartX, sampleStartY], [sampleStartX + sampleSize, sampleStartY], [sampleStartX + sampleSize, sampleStartY + sampleSize], [sampleStartX, sampleStartY + sampleSize]], samplesRef[i], "rgb");
         sampleStartY = sampleStartY + sampleSize;
     }
 
@@ -186,91 +308,131 @@ function main() {
     app.preferences.typeUnits = currentTypeUnits;
     app.displayDialogs = currentDisplayDialogs;
 
-    // Create garment adjustment layers
-    activeDocument.activeLayer = lyr_GrpSamplesGarm;
-    createLevels();
-    var lyr_Levels = activeDocument.activeLayer;
-    lyr_Levels.name = "Levels";
-    deleteMask();
+    //////////////////////////////////////////////
+    ///////// ADJUSTMENT - CHANNEL MIXER /////////
+    //////////////////////////////////////////////
 
+    // Create garment adjustment layers
+    activeDocument.activeLayer = lyr_Curves;
     var chMxArray = [];
     for (i = 0; i < gradientSteps; i++) {
         createChannelMixer();
         chMxArray.push(activeDocument.activeLayer);
         activeDocument.activeLayer.name = "Channel Mixer (" + (blendIfSpan * i) + "-" + (blendIfSpan * (i + 1)) + ")";
-        blendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]);
+        blendIf([0, 0], [255, 255], [blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)]);
     }
 
+    lyr_Curves.move(grp_Garment, ElementPlacement.INSIDE);
     app.refresh();
-
-    // Adjust garment adjustment layers
+    
+    // Adjust Channel Mixers
     activeDocument.activeLayer = lyr_GrpSamplesGarm;
-    adjustLevelsToMatch(lyr_Levels, samplesArray[0], samplesArray[gradientSteps + 1]);
-
     for (i = 0; i < gradientSteps; i++) {
-        adjustRgbToMatch(chMxArray[i], samplesArray[i + 1], samplesArray[(gradientSteps + 2) + i]);
+        adjustRgbToMatch(chMxArray[i], samplesArrayRGB[i], samplesArrayRGB[gradientSteps + i]);
     }
 
-    lyr_Levels.move(grp_Garment, ElementPlacement.INSIDE);
+    // Move layers to Garment group
     for (i = 0; i < gradientSteps; i++) {
         chMxArray[i].move(grp_Garment, ElementPlacement.INSIDE);
     }
 
-    return;
-    
-    TODO: // Need more reliable way to get the average colour of a BlendIf span that is small!
-    TODO: // Stuff below needs to be iterated! <3
-
     // Clean-up
-    activeDocument.colorSamplers.removeAll();
-    lyr_GrpSamplesGarm.remove();
-    lyr_GrpSamplesRef.remove();
+    lyr_SamplerCheck.remove();
+    if (!troubleshoot) {
+        activeDocument.colorSamplers.removeAll();
+        lyr_GrpSamplesGarm.remove();
+        lyr_GrpSamplesRef.remove();
+        grp_Ref.visible = showEndMatchRef;
+    }
 
-    // Change Blend If values and add Vibrance layers
-    activeDocument.activeLayer = chMix_Lows;
+    /////////////////////////////////////
+    ///////// ADDITIONAL LAYERS /////////
+    /////////////////////////////////////
+
+    // Add vibrance layers
+    var blendIfSpanGrad = blendIfSpan + (blendIfSpan / gradientSteps);
+    for (i = 0; i < gradientSteps; i++) {
+
+        var blackLow = Math.round(blendIfSpanGrad * (i - 1) + (blendIfSpanGrad / 2));
+        if (blackLow < 0) blackLow = 0;
+        var blackHigh = Math.round(blendIfSpanGrad * i + (blendIfSpanGrad / 2));
+
+        var whiteLow = Math.round(blendIfSpanGrad * i + (blendIfSpanGrad / 2));
+        var whiteHigh = Math.round(blendIfSpanGrad * (i + 1) + (blendIfSpanGrad / 2));
+        if (whiteHigh > 255) whiteHigh = 255;
+        
+        activeDocument.activeLayer = chMxArray[i];
+        deleteMask();
+        blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
+
+        var weightedOpacity = (40 + spanWeight[i] * (1 + garmentSize));
+        if (weightedOpacity > 100.00) weightedOpacity = 100.00;
+        chMxArray[i].opacity = weightedOpacity;
+        if (weightedOpacity == 40.00) {
+            chMxArray[i].opacity = 0.0;
+            functionLayerColour("grey");
+            chMxArray[i].visible = false;
+        }
+
+        createVibrance();
+        adjustVibrance(-100);
+        blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
+        activeDocument.activeLayer.name = "Vibrance (" + (blendIfSpan * i) + "-" + (blendIfSpan * (i + 1)) + ")";
+
+        activeDocument.activeLayer.opacity = 0.0;
+        deleteMask();
+        if (weightedOpacity == 40.00) {
+            functionLayerColour("grey");
+            activeDocument.activeLayer.visible = false;
+        }
+
+    }
+
+    // Add "Raise Black Point" adjustment layer
+    activeDocument.activeLayer = lyr_Curves;
+    createCurves();
+    activeDocument.activeLayer.name = "Raise Black Point";
     deleteMask();
-    blendIf([0, 0], [255, 255], [0, 0], [0, 85]);
-    createVibrance();
-    adjustVibrance(-100);
-    blendIf([0, 0], [255, 255], [0, 0], [0, 85]);
-    activeDocument.activeLayer.name = "Vibrance (0-85)";
-    activeDocument.activeLayer.opacity = 50.0;
-    deleteMask();
-    activeDocument.activeLayer = chMix_Mids;
-    deleteMask();
-    blendIf([0, 0], [255, 255], [0, 127], [128, 255]);
-    createVibrance();
-    adjustVibrance(-100);
-    blendIf([0, 0], [255, 255], [0, 127], [128, 255]);
-    activeDocument.activeLayer.name = "Vibrance (85-170)";
+    adjustCurves([[0, 50], [255, 255]]);
     activeDocument.activeLayer.opacity = 0.0;
+
+    // Add "Lower White Point" adjustment layer
+    activeDocument.activeLayer = lyr_Curves;
+    createCurves();
+    activeDocument.activeLayer.name = "Lower White Point";
     deleteMask();
-    activeDocument.activeLayer = chMix_Highs;
-    deleteMask();
-    blendIf([0, 0], [255, 255], [170, 212], [255, 255]);
-    createVibrance();
-    adjustVibrance(-100);
-    blendIf([0, 0], [255, 255], [170, 212], [255, 255]);
-    activeDocument.activeLayer.name = "Vibrance (170-255)";
+    adjustCurves([[0, 0], [255, 205]]);
     activeDocument.activeLayer.opacity = 0.0;
+
+    // Add "Less Contrast" adjustment layer
+    activeDocument.activeLayer = lyr_Curves;
+    createCurves();
+    activeDocument.activeLayer.name = "Less Contrast";
     deleteMask();
+    adjustCurves([[0, 50], [255, 205]]);
+    activeDocument.activeLayer.opacity = 0.0;
 
 }
 
 // FUNCTIONS
 
 function adjustRgbToMatch(lyr, sampleA, sampleB) {
-
+    
     if (sampleA.color.rgb.red == 0 && sampleA.color.rgb.green == 0 && sampleA.color.rgb.blue == 0) return;
+    if (sampleB.color.rgb.red == 0 && sampleB.color.rgb.green == 0 && sampleB.color.rgb.blue == 0) return;
+    var timeoutStart = 69;
+    var startValueStart = 100.00;
+    var steps = 0.5;
 
-    var timeout = 20;
-    var startValue = 100;
+    var timeout = timeoutStart;
+    var startValue = startValueStart;
+
     if (sampleA.color.rgb.red < sampleB.color.rgb.red) {
         while (sampleA.color.rgb.red < sampleB.color.rgb.red) {
             activeDocument.activeLayer = lyr;
             adjustChannelMixer("red", startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
-            startValue++;
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            startValue = startValue + steps;
             timeout--;
             if (timeout <= 0) break;
         }
@@ -278,20 +440,20 @@ function adjustRgbToMatch(lyr, sampleA, sampleB) {
         while (sampleA.color.rgb.red > sampleB.color.rgb.red) {
             activeDocument.activeLayer = lyr;
             adjustChannelMixer("red", startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
-            startValue--;
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            startValue = startValue - steps;
             timeout--;
             if (timeout <= 0) break;
         }
     }
-    var timeout = 20;
-    var startValue = 100;
+    var timeout = timeoutStart;
+    var startValue = startValueStart;
     if (sampleA.color.rgb.green < sampleB.color.rgb.green) {
         while (sampleA.color.rgb.green < sampleB.color.rgb.green) {
             activeDocument.activeLayer = lyr;
             adjustChannelMixer("green", startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
-            startValue++;
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            startValue = startValue + steps;
             timeout--;
             if (timeout <= 0) break;
         }
@@ -299,20 +461,20 @@ function adjustRgbToMatch(lyr, sampleA, sampleB) {
         while (sampleA.color.rgb.green > sampleB.color.rgb.green) {
             activeDocument.activeLayer = lyr;
             adjustChannelMixer("green", startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
-            startValue--;
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            startValue = startValue - steps;
             timeout--;
             if (timeout <= 0) break;
         }
     }
-    var timeout = 20;
-    var startValue = 100;
+    var timeout = timeoutStart;
+    var startValue = startValueStart;
     if (sampleA.color.rgb.blue < sampleB.color.rgb.blue) {
         while (sampleA.color.rgb.blue < sampleB.color.rgb.blue) {
             activeDocument.activeLayer = lyr;
             adjustChannelMixer("blue", startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
-            startValue++;
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            startValue = startValue + steps;
             timeout--;
             if (timeout <= 0) break;
         }
@@ -320,8 +482,8 @@ function adjustRgbToMatch(lyr, sampleA, sampleB) {
         while (sampleA.color.rgb.blue > sampleB.color.rgb.blue) {
             activeDocument.activeLayer = lyr;
             adjustChannelMixer("blue", startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
-            startValue--;
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            startValue = startValue - steps;
             timeout--;
             if (timeout <= 0) break;
         }
@@ -329,13 +491,13 @@ function adjustRgbToMatch(lyr, sampleA, sampleB) {
 }
 
 function adjustLevelsToMatch(lyr, sampleA, sampleB) {
-    var timeout = 20;
+    var timeout = 61;
     var startValue = 1.000000;
     if (sampleA.color.rgb.red < sampleB.color.rgb.red) {
         while (sampleA.color.rgb.red < sampleB.color.rgb.red) {
             activeDocument.activeLayer = lyr;
-            adjustLevels(startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
+            adjustLevels("gamma", startValue);
+            activeDocument.activeLayer = lyr_SamplerCheck;
             startValue = startValue + 0.01;
             timeout--;
             if (timeout <= 0) break;
@@ -343,8 +505,8 @@ function adjustLevelsToMatch(lyr, sampleA, sampleB) {
     } else {
         while (sampleA.color.rgb.red > sampleB.color.rgb.red) {
             activeDocument.activeLayer = lyr;
-            adjustLevels(startValue);
-            activeDocument.activeLayer = lyr_GrpSamplesGarm;
+            adjustLevels("gamma", startValue);
+            activeDocument.activeLayer = lyr_SamplerCheck;
             startValue = startValue - 0.01;
             timeout--;
             if (timeout <= 0) break;
@@ -352,16 +514,48 @@ function adjustLevelsToMatch(lyr, sampleA, sampleB) {
     }
 }
 
-function createSamples(coordinates, rgb) {
+function adjustCurvesToMatch(lyr, sampleA, sampleB) {
+    var timeout = 41;
+    var input = 128.000000;
+    var output = 128.000000;
+    if (sampleA.color.rgb.red < sampleB.color.rgb.red) {
+        while (sampleA.color.rgb.red < sampleB.color.rgb.red) {
+            activeDocument.activeLayer = lyr;
+            adjustCurves([[0, 0], [input, output], [255, 253]]);
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            input = input - 1;
+            output = output + 1;
+            timeout--;
+            if (timeout <= 0) break;
+        }
+    } else {
+        while (sampleA.color.rgb.red > sampleB.color.rgb.red) {
+            activeDocument.activeLayer = lyr;
+            adjustCurves([[0, 0], [input, output], [255, 253]]);
+            activeDocument.activeLayer = lyr_SamplerCheck;
+            input = input + 1;
+            output = output - 1;
+            timeout--;
+            if (timeout <= 0) break;
+        }
+    }
+}
+
+function createSamples(coordinates, rgb, mode) {
     makePointSelection(coordinates, 0, SelectionType.REPLACE);
     fillSolidColour(rgb[0], rgb[1], rgb[2]);
     selectionFromMask();
     var daSample = activeDocument.colorSamplers.add([activeDocument.selection.bounds[0].as('pt') + 1, activeDocument.selection.bounds[1].as('pt') + 1]);
     activeDocument.selection.deselect();
-    samplesArray.push(daSample);
+    
+    if (mode == "rgb") {
+        samplesArrayRGB.push(daSample);
+    } else {
+        samplesArrayBrightness.push(daSample);
+    }
 }
 
-function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
+function getSpanWeight(thisBlack, thisWhite, underBlack, underWhite) {
 
     blendIf(thisBlack, thisWhite, underBlack, underWhite);
     colorRange("shadows", 0, 0);
@@ -369,7 +563,67 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     try {
         if (activeDocument.selection.bounds) activeDocument.selection.clear();
     } catch(e) {
-        return [255, 255, 255];
+        return 0.0;
+    }
+    activeDocument.selection.deselect();
+    blendIf([0, 0], [255, 255], [0, 0], [255, 255]);
+    
+    // Fill white
+    var idfill = stringIDToTypeID( "fill" );
+        var desc1718 = new ActionDescriptor();
+        var idusing = stringIDToTypeID( "using" );
+        var idfillContents = stringIDToTypeID( "fillContents" );
+        var idcolor = stringIDToTypeID( "color" );
+        desc1718.putEnumerated( idusing, idfillContents, idcolor );
+        var idcolor = stringIDToTypeID( "color" );
+            var desc1719 = new ActionDescriptor();
+            var idhue = stringIDToTypeID( "hue" );
+            var idangleUnit = stringIDToTypeID( "angleUnit" );
+            desc1719.putUnitDouble( idhue, idangleUnit, 0.000000 );
+            var idsaturation = stringIDToTypeID( "saturation" );
+            desc1719.putDouble( idsaturation, 0.000000 );
+            var idbrightness = stringIDToTypeID( "brightness" );
+            desc1719.putDouble( idbrightness, 100.000000 );
+        var idHSBColorClass = stringIDToTypeID( "HSBColorClass" );
+        desc1718.putObject( idcolor, idHSBColorClass, desc1719 );
+        var idopacity = stringIDToTypeID( "opacity" );
+        var idpercentUnit = stringIDToTypeID( "percentUnit" );
+        desc1718.putUnitDouble( idopacity, idpercentUnit, 100.000000 );
+        var idmode = stringIDToTypeID( "mode" );
+        var idblendMode = stringIDToTypeID( "blendMode" );
+        var idnormal = stringIDToTypeID( "normal" );
+        desc1718.putEnumerated( idmode, idblendMode, idnormal );
+        var idpreserveTransparency = stringIDToTypeID( "preserveTransparency" );
+        desc1718.putBoolean( idpreserveTransparency, true );
+    executeAction( idfill, desc1718, DialogModes.NO );
+
+    var tempWeight = activeDocument.activeLayer;
+    var grp_TempWeight = activeDocument.layerSets.add();
+    lyr_FillAuto.move(grp_TempWeight, ElementPlacement.INSIDE);
+    tempWeight.move(grp_TempWeight, ElementPlacement.INSIDE);
+    grp_TempWeight.merge();
+
+    // Average
+    layerSelection();
+    var idAvrg = charIDToTypeID( "Avrg" );
+    executeAction( idAvrg, undefined, DialogModes.NO );
+    activeDocument.selection.deselect();
+
+    getSample();
+    return (cleanRGB[0] / 255) * 100; // Return value from 0-100
+
+}
+
+function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
+
+    blendIf(thisBlack, thisWhite, underBlack, underWhite);
+    colorRange("shadows", 0, 0);
+    activeDocument.selection.expand(new UnitValue (1, "px"));
+
+    try {
+        if (activeDocument.selection.bounds) activeDocument.selection.clear();
+    } catch(e) {
+        return [0, 0, 0];
     }
     activeDocument.selection.deselect();
     blendIf([0, 0], [255, 255], [0, 0], [255, 255]);
@@ -377,9 +631,9 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     try {
         alignCenter();
     } catch(e) {
-        return [255, 255, 255];
+        return [0, 0, 0];
     }
-    
+
     // Average
     layerSelection();
     var idAvrg = charIDToTypeID( "Avrg" );
@@ -387,13 +641,11 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     activeDocument.selection.deselect();
     
     layerSelection();
-    activeDocument.selection.contract(new UnitValue (2, "px"));
+    activeDocument.selection.contract(new UnitValue (1, "px"));
     activeDocument.selection.invert();
     try {
         if (activeDocument.selection.bounds) activeDocument.selection.clear();
-    } catch(e) {
-        return [255, 255, 255];
-    }
+    } catch(e) {}
     activeDocument.selection.deselect();
     
     // Minimum
@@ -407,13 +659,37 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
         var idsquareness = stringIDToTypeID( "squareness" );
         desc252.putEnumerated( idpreserveShape, idpreserveShape, idsquareness );
     executeAction( idminimum, desc252, DialogModes.NO );
-
+    
     // Average
     layerSelection();
     var idAvrg = charIDToTypeID( "Avrg" );
     executeAction( idAvrg, undefined, DialogModes.NO );
     activeDocument.selection.deselect();
+    
+    var centerX = activeDocument.width.as('pt') / 2;
+    var centerY = activeDocument.height.as('pt') / 2;
+    var squareSize = 20;
+    var left = Math.round(centerX - (squareSize / 2));
+    var top = Math.round(centerY - (squareSize / 2));
+    var right = Math.round(centerX + (squareSize / 2));
+    var bottom = Math.round(centerY + (squareSize / 2));
+    makePointSelection([[left, top],[right, top],[right, bottom], [left, bottom]], 0, SelectionType.REPLACE);
+    layerSelectionDiminish();
 
+    try {
+        if (activeDocument.selection.bounds) {
+            contentAwareFill(false);
+            layerSelection();
+            activeDocument.selection.contract(new UnitValue (2, "px"));
+            activeDocument.selection.invert();
+            removeSelectionFeather();
+            activeDocument.selection.clear();
+            activeDocument.selection.deselect();
+        }
+    } catch(e) {
+        // The sample will be big enough
+    }
+    
     // Sample
     activeDocument.suspendHistory("Get sample", "getSample()");
 
@@ -427,6 +703,8 @@ function getSample() {
     var sampleSteps = 20;
     var direction = "right";
     cleanRGB = [0, 0, 0];
+    activeDocument.activeLayer = lyr_SamplerCheck;
+        
     while (cleanRGB[0] == 0 && cleanRGB[1] == 0 && cleanRGB[2] == 0) {
 
         switch (direction) {
@@ -445,6 +723,7 @@ function getSample() {
         newColor.rgb.red = cSr;
         newColor.rgb.green = cSg;
         newColor.rgb.blue = cSb;
+
         cleanRGB = [cSr, cSg, cSb];
         
         activeDocument.colorSamplers.removeAll();
@@ -452,6 +731,29 @@ function getSample() {
         if (sampleChecks >= 20) break;
 
     }
+}
+
+function functionLayerColour(colour) {
+	switch (colour.toLocaleLowerCase()) {
+		case 'red': colour = 'Rd  '; break;
+		case 'orange' : colour = 'Orng'; break;
+		case 'yellow' : colour = 'Ylw '; break;
+		case 'green' : colour = 'Grn '; break;
+		case 'blue' : colour = 'Bl  '; break;
+		case 'violet' : colour = 'Vlt '; break;
+		case 'gray' : colour = 'Gry '; break;
+		case 'grey' : colour = 'Gry '; break;
+		case 'none' : colour = 'None'; break;
+		default : colour = 'None'; break;
+	}
+	var desc = new ActionDescriptor();
+		var ref = new ActionReference();
+		ref.putEnumerated( charIDToTypeID('Lyr '), charIDToTypeID('Ordn'), charIDToTypeID('Trgt') );
+	desc.putReference( charIDToTypeID('null'), ref );
+		var desc2 = new ActionDescriptor();
+		desc2.putEnumerated( charIDToTypeID('Clr '), charIDToTypeID('Clr '), charIDToTypeID(colour) );
+	desc.putObject( charIDToTypeID('T   '), charIDToTypeID('Lyr '), desc2 );
+	executeAction( charIDToTypeID('setd'), desc, DialogModes.NO );
 }
 
 function selectionFromMask() {
@@ -473,12 +775,94 @@ function selectionFromMask() {
     executeAction( idset, desc307, DialogModes.NO );
 }
 
+function maskFeather(lyr, amount) {
+    var currentLyr = activeDocument.activeLayer;
+    activeDocument.activeLayer = lyr;
+  
+    var idset = stringIDToTypeID( "set" );
+        var desc1032 = new ActionDescriptor();
+        var idnull = stringIDToTypeID( "null" );
+            var ref525 = new ActionReference();
+            var idlayer = stringIDToTypeID( "layer" );
+            var idordinal = stringIDToTypeID( "ordinal" );
+            var idtargetEnum = stringIDToTypeID( "targetEnum" );
+            ref525.putEnumerated( idlayer, idordinal, idtargetEnum );
+        desc1032.putReference( idnull, ref525 );
+        var idto = stringIDToTypeID( "to" );
+            var desc1033 = new ActionDescriptor();
+            var iduserMaskFeather = stringIDToTypeID( "userMaskFeather" );
+            var idpixelsUnit = stringIDToTypeID( "pixelsUnit" );
+            desc1033.putUnitDouble( iduserMaskFeather, idpixelsUnit, amount );
+        var idlayer = stringIDToTypeID( "layer" );
+        desc1032.putObject( idto, idlayer, desc1033 );
+    executeAction( idset, desc1032, DialogModes.NO );
+    
+    activeDocument.activeLayer = currentLyr;
+}
+
+function removeSelectionFeather() {
+    var idsmartBrushWorkspace = stringIDToTypeID( "smartBrushWorkspace" );
+        var desc214 = new ActionDescriptor();
+        var idsmartBrushRadius = stringIDToTypeID( "smartBrushRadius" );
+        desc214.putInteger( idsmartBrushRadius, 0 );
+        var idsmartBrushSmooth = stringIDToTypeID( "smartBrushSmooth" );
+        desc214.putInteger( idsmartBrushSmooth, 0 );
+        var idsmartBrushFeather = stringIDToTypeID( "smartBrushFeather" );
+        var idpixelsUnit = stringIDToTypeID( "pixelsUnit" );
+        desc214.putUnitDouble( idsmartBrushFeather, idpixelsUnit, 0.000000 );
+        var idsmartBrushContrast = stringIDToTypeID( "smartBrushContrast" );
+        var idpercentUnit = stringIDToTypeID( "percentUnit" );
+        desc214.putUnitDouble( idsmartBrushContrast, idpercentUnit, 100.000000 );
+        var idsmartBrushShiftEdge = stringIDToTypeID( "smartBrushShiftEdge" );
+        var idpercentUnit = stringIDToTypeID( "percentUnit" );
+        desc214.putUnitDouble( idsmartBrushShiftEdge, idpercentUnit, 0.000000 );
+        var idsampleAllLayers = stringIDToTypeID( "sampleAllLayers" );
+        desc214.putBoolean( idsampleAllLayers, true );
+        var idsmartBrushUseSmartRadius = stringIDToTypeID( "smartBrushUseSmartRadius" );
+        desc214.putBoolean( idsmartBrushUseSmartRadius, false );
+        var idsmartBrushDecontaminate = stringIDToTypeID( "smartBrushDecontaminate" );
+        desc214.putBoolean( idsmartBrushDecontaminate, false );
+        var idsmartBrushDeconAmount = stringIDToTypeID( "smartBrushDeconAmount" );
+        var idpercentUnit = stringIDToTypeID( "percentUnit" );
+        desc214.putUnitDouble( idsmartBrushDeconAmount, idpercentUnit, 100.000000 );
+        var idrefineEdgeOutput = stringIDToTypeID( "refineEdgeOutput" );
+        var idrefineEdgeOutput = stringIDToTypeID( "refineEdgeOutput" );
+        var idselectionOutputToSelection = stringIDToTypeID( "selectionOutputToSelection" );
+        desc214.putEnumerated( idrefineEdgeOutput, idrefineEdgeOutput, idselectionOutputToSelection );
+    executeAction( idsmartBrushWorkspace, desc214, DialogModes.NO );
+}
+
 function selectSubject(sampleAllLayers) {
     var idautoCutout = stringIDToTypeID( "autoCutout" );
         var desc16 = new ActionDescriptor();
         var idsampleAllLayers = stringIDToTypeID( "sampleAllLayers" );
         desc16.putBoolean( idsampleAllLayers, sampleAllLayers );
     executeAction( idautoCutout, desc16, DialogModes.NO );
+}
+
+function contentAwareFill(colorAdaption) {
+    var idfill = stringIDToTypeID( "fill" );
+        var desc180 = new ActionDescriptor();
+        var idusing = stringIDToTypeID( "using" );
+        var idfillContents = stringIDToTypeID( "fillContents" );
+        var idcontentAware = stringIDToTypeID( "contentAware" );
+        desc180.putEnumerated( idusing, idfillContents, idcontentAware );
+        var idcontentAwareColorAdaptationFill = stringIDToTypeID( "contentAwareColorAdaptationFill" );
+        desc180.putBoolean( idcontentAwareColorAdaptationFill, colorAdaption );
+        var idcontentAwareRotateFill = stringIDToTypeID( "contentAwareRotateFill" );
+        desc180.putBoolean( idcontentAwareRotateFill, false );
+        var idcontentAwareScaleFill = stringIDToTypeID( "contentAwareScaleFill" );
+        desc180.putBoolean( idcontentAwareScaleFill, false );
+        var idcontentAwareMirrorFill = stringIDToTypeID( "contentAwareMirrorFill" );
+        desc180.putBoolean( idcontentAwareMirrorFill, false );
+        var idopacity = stringIDToTypeID( "opacity" );
+        var idpercentUnit = stringIDToTypeID( "percentUnit" );
+        desc180.putUnitDouble( idopacity, idpercentUnit, 100.000000 );
+        var idmode = stringIDToTypeID( "mode" );
+        var idblendMode = stringIDToTypeID( "blendMode" );
+        var idnormal = stringIDToTypeID( "normal" );
+        desc180.putEnumerated( idmode, idblendMode, idnormal );
+    executeAction( idfill, desc180, DialogModes.NO );
 }
 
 function layerSelection() {
@@ -498,6 +882,25 @@ function layerSelection() {
             ref1145.putEnumerated( idchannel, idchannel, idtransparencyEnum );
         desc1345.putReference( idto, ref1145 );
     executeAction( idset, desc1345, DialogModes.NO );
+}
+
+function layerSelectionDiminish() {
+    var idsubtract = stringIDToTypeID( "subtract" );
+        var desc84 = new ActionDescriptor();
+        var idnull = stringIDToTypeID( "null" );
+            var ref76 = new ActionReference();
+            var idchannel = stringIDToTypeID( "channel" );
+            var idchannel = stringIDToTypeID( "channel" );
+            var idtransparencyEnum = stringIDToTypeID( "transparencyEnum" );
+            ref76.putEnumerated( idchannel, idchannel, idtransparencyEnum );
+        desc84.putReference( idnull, ref76 );
+        var idfrom = stringIDToTypeID( "from" );
+            var ref77 = new ActionReference();
+            var idchannel = stringIDToTypeID( "channel" );
+            var idselection = stringIDToTypeID( "selection" );
+            ref77.putProperty( idchannel, idselection );
+        desc84.putReference( idfrom, ref77 );
+    executeAction( idsubtract, desc84, DialogModes.NO );
 }
 
 function deleteMask() {
@@ -650,6 +1053,84 @@ function adjustVibrance(value) {
     executeAction( idset, desc484, DialogModes.NO );
 }
 
+function createCurves() {
+    var idmake = stringIDToTypeID( "make" );
+        var desc951 = new ActionDescriptor();
+        var idnull = stringIDToTypeID( "null" );
+            var ref828 = new ActionReference();
+            var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
+            ref828.putClass( idadjustmentLayer );
+        desc951.putReference( idnull, ref828 );
+        var idusing = stringIDToTypeID( "using" );
+            var desc952 = new ActionDescriptor();
+            var idtype = stringIDToTypeID( "type" );
+                var desc953 = new ActionDescriptor();
+                var idpresetKind = stringIDToTypeID( "presetKind" );
+                var idpresetKindType = stringIDToTypeID( "presetKindType" );
+                var idpresetKindDefault = stringIDToTypeID( "presetKindDefault" );
+                desc953.putEnumerated( idpresetKind, idpresetKindType, idpresetKindDefault );
+            var idcurves = stringIDToTypeID( "curves" );
+            desc952.putObject( idtype, idcurves, desc953 );
+        var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
+        desc951.putObject( idusing, idadjustmentLayer, desc952 );
+    executeAction( idmake, desc951, DialogModes.NO );
+
+    var idset = stringIDToTypeID( "set" );
+        var desc982 = new ActionDescriptor();
+        var idnull = stringIDToTypeID( "null" );
+            var ref843 = new ActionReference();
+            var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
+            var idordinal = stringIDToTypeID( "ordinal" );
+            var idtargetEnum = stringIDToTypeID( "targetEnum" );
+            ref843.putEnumerated( idadjustmentLayer, idordinal, idtargetEnum );
+        desc982.putReference( idnull, ref843 );
+        var idto = stringIDToTypeID( "to" );
+            var desc983 = new ActionDescriptor();
+            var idpresetKind = stringIDToTypeID( "presetKind" );
+            var idpresetKindType = stringIDToTypeID( "presetKindType" );
+            var idpresetKindCustom = stringIDToTypeID( "presetKindCustom" );
+            desc983.putEnumerated( idpresetKind, idpresetKindType, idpresetKindCustom );
+        var idcurves = stringIDToTypeID( "curves" );
+        desc982.putObject( idto, idcurves, desc983 );
+    executeAction( idset, desc982, DialogModes.NO );
+}
+
+function adjustCurves(points) {
+
+    if (points.length < 2) return false;
+
+    var desc = new ActionDescriptor();
+    var ref = new ActionReference();
+        ref.putEnumerated( charIDToTypeID( "AdjL" ), charIDToTypeID( "Ordn" ), charIDToTypeID( "Trgt" ) );
+        desc.putReference( charIDToTypeID( "null" ), ref );
+    
+    var curvesLayerDesc = new ActionDescriptor();
+        curvesLayerDesc.putEnumerated( stringIDToTypeID( "presetKind" ), stringIDToTypeID( "presetKindType" ), stringIDToTypeID( "presetKindCustom" ) );
+    
+    var chnlList = new ActionList();
+    var chnlDesc = new ActionDescriptor();
+    var channelRef = new ActionReference();
+        channelRef.putEnumerated( charIDToTypeID( "Chnl" ), charIDToTypeID( "Chnl" ), charIDToTypeID( "Cmps" ) );
+        chnlDesc.putReference( charIDToTypeID( "Chnl" ), channelRef );
+    
+        var pointsList = new ActionList();
+
+        for (var pointIndex = 0; pointIndex < points.length; pointIndex++) {
+            var pointDesc = new ActionDescriptor();
+                pointDesc.putDouble( charIDToTypeID( "Hrzn" ), points[pointIndex][0] );
+                pointDesc.putDouble( charIDToTypeID( "Vrtc" ), points[pointIndex][1] );
+                pointsList.putObject( charIDToTypeID( "Pnt " ), pointDesc );
+        }
+    
+        chnlDesc.putList( charIDToTypeID( "Crv " ), pointsList );
+        chnlList.putObject( charIDToTypeID( "CrvA" ), chnlDesc );
+    
+        curvesLayerDesc.putList( charIDToTypeID( "Adjs" ), chnlList );
+        desc.putObject( charIDToTypeID( "T   " ), charIDToTypeID( "Crvs" ), curvesLayerDesc );
+    executeAction( charIDToTypeID( "setd" ), desc, DialogModes.NO );
+
+}
+
 function createLevels() {
     var idmake = stringIDToTypeID( "make" );
         var desc112 = new ActionDescriptor();
@@ -673,40 +1154,44 @@ function createLevels() {
     executeAction( idmake, desc112, DialogModes.NO );
 }
 
-function adjustLevels(value) {
-    var idset = stringIDToTypeID( "set" );
-        var desc115 = new ActionDescriptor();
-        var idnull = stringIDToTypeID( "null" );
-            var ref109 = new ActionReference();
-            var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
-            var idordinal = stringIDToTypeID( "ordinal" );
-            var idtargetEnum = stringIDToTypeID( "targetEnum" );
-            ref109.putEnumerated( idadjustmentLayer, idordinal, idtargetEnum );
-        desc115.putReference( idnull, ref109 );
-        var idto = stringIDToTypeID( "to" );
-            var desc116 = new ActionDescriptor();
-            var idpresetKind = stringIDToTypeID( "presetKind" );
-            var idpresetKindType = stringIDToTypeID( "presetKindType" );
-            var idpresetKindCustom = stringIDToTypeID( "presetKindCustom" );
-            desc116.putEnumerated( idpresetKind, idpresetKindType, idpresetKindCustom );
-            var idadjustment = stringIDToTypeID( "adjustment" );
-                var list47 = new ActionList();
-                    var desc117 = new ActionDescriptor();
-                    var idchannel = stringIDToTypeID( "channel" );
-                        var ref110 = new ActionReference();
-                        var idchannel = stringIDToTypeID( "channel" );
-                        var idchannel = stringIDToTypeID( "channel" );
-                        var idcomposite = stringIDToTypeID( "composite" );
-                        ref110.putEnumerated( idchannel, idchannel, idcomposite );
-                    desc117.putReference( idchannel, ref110 );
-                    var idgamma = stringIDToTypeID( "gamma" );
-                    desc117.putDouble( idgamma, value );
-                var idlevelsAdjustment = stringIDToTypeID( "levelsAdjustment" );
-                list47.putObject( idlevelsAdjustment, desc117 );
-            desc116.putList( idadjustment, list47 );
-        var idlevels = stringIDToTypeID( "levels" );
-        desc115.putObject( idto, idlevels, desc116 );
-    executeAction( idset, desc115, DialogModes.NO );
+function adjustLevels(section, value) {
+    switch (section) {
+        case "gamma":
+            var idset = stringIDToTypeID( "set" );
+                var desc115 = new ActionDescriptor();
+                var idnull = stringIDToTypeID( "null" );
+                    var ref109 = new ActionReference();
+                    var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
+                    var idordinal = stringIDToTypeID( "ordinal" );
+                    var idtargetEnum = stringIDToTypeID( "targetEnum" );
+                    ref109.putEnumerated( idadjustmentLayer, idordinal, idtargetEnum );
+                desc115.putReference( idnull, ref109 );
+                var idto = stringIDToTypeID( "to" );
+                    var desc116 = new ActionDescriptor();
+                    var idpresetKind = stringIDToTypeID( "presetKind" );
+                    var idpresetKindType = stringIDToTypeID( "presetKindType" );
+                    var idpresetKindCustom = stringIDToTypeID( "presetKindCustom" );
+                    desc116.putEnumerated( idpresetKind, idpresetKindType, idpresetKindCustom );
+                    var idadjustment = stringIDToTypeID( "adjustment" );
+                        var list47 = new ActionList();
+                            var desc117 = new ActionDescriptor();
+                            var idchannel = stringIDToTypeID( "channel" );
+                                var ref110 = new ActionReference();
+                                var idchannel = stringIDToTypeID( "channel" );
+                                var idchannel = stringIDToTypeID( "channel" );
+                                var idcomposite = stringIDToTypeID( "composite" );
+                                ref110.putEnumerated( idchannel, idchannel, idcomposite );
+                            desc117.putReference( idchannel, ref110 );
+                            var idgamma = stringIDToTypeID( "gamma" );
+                            desc117.putDouble( idgamma, value );
+                        var idlevelsAdjustment = stringIDToTypeID( "levelsAdjustment" );
+                        list47.putObject( idlevelsAdjustment, desc117 );
+                    desc116.putList( idadjustment, list47 );
+                var idlevels = stringIDToTypeID( "levels" );
+                desc115.putObject( idto, idlevels, desc116 );
+            executeAction( idset, desc115, DialogModes.NO );
+            break;
+    }
 }
 
 function createChannelMixer() {
