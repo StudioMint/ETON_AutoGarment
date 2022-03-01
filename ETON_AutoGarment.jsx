@@ -32,8 +32,9 @@ var blendIfSpanBrightness = Math.round(255 / brightnessSteps);
 var brightnessBlendCap = 0;
 var garmentSize; // 0.0-1.0 - If 0.0 then garment bounds fill the whole canvas
 
-var troubleshoot = true;
-var showEndMatchRef = true;
+var troubleshoot = false;
+var showEndMatchRef = false;
+var saveJpgCheckFile = true;
 
 try {
     init();
@@ -342,6 +343,12 @@ function main() {
         activeDocument.colorSamplers.removeAll();
         lyr_GrpSamplesGarm.remove();
         lyr_GrpSamplesRef.remove();
+        grp_Ref.visible = showEndMatchRef;
+    }
+    if (saveJpgCheckFile) {
+        grp_Ref.visible = true;
+        var jpgDir = new Folder(activeDocument.path + "/_MatchCheck");
+        saveAsJPG(jpgDir, activeDocument.name.substring(0, activeDocument.name.lastIndexOf(".")));
         grp_Ref.visible = showEndMatchRef;
     }
 
@@ -1402,4 +1409,16 @@ function formatSeconds(sec) {
     var minutes = Math.floor(sec / 60) - (hours * 60);
     var seconds = sec % 60;
     return Math.floor(hours).twoDigits() + ':' + Math.floor(minutes).twoDigits() + ':' + Math.floor(seconds).twoDigits();
+}
+
+function saveAsJPG(folder, name) {
+    if (!folder.exists) folder.create();
+    jpgFile = new File(folder + "/" + name + ".jpg");
+    jpgSaveOptions = new JPEGSaveOptions();
+    jpgSaveOptions.embedColorProfile = true;
+    jpgSaveOptions.formatOptions = FormatOptions.STANDARDBASELINE;
+    jpgSaveOptions.matte = MatteType.NONE;
+    jpgSaveOptions.quality = 8;
+    activeDocument.saveAs(jpgFile, jpgSaveOptions, true, Extension.LOWERCASE);
+    return jpgFile;
 }
