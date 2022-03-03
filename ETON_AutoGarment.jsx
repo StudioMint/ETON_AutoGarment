@@ -25,8 +25,8 @@ var spanWeight = [];
 var grp_Garment;
 var grp_Ref;
 var cleanRGB;
-var gradientSteps = 4; // Max 5
-var blendIfSpan = Math.round(255 / gradientSteps);
+var gradientSteps = 5; // Max 5
+var blendIfSpan;
 var brightnessSteps = 1; // Max 3 (Max 1 atm bcuz tricky..)
 var blendIfSpanBrightness = Math.round(255 / brightnessSteps);
 var brightnessBlendCap = 0;
@@ -35,6 +35,7 @@ var garmentSize; // 0.0-1.0 - If 0.0 then garment bounds fill the whole canvas
 var troubleshoot = false;
 var showEndMatchRef = false;
 var saveJpgCheckFile = true;
+var skipPopulated = true;
 
 try {
     init();
@@ -48,20 +49,36 @@ app.preferences.typeUnits = startTypeUnits;
 app.displayDialogs = startDisplayDialogs;
 
 function init() {
+
+    //gradientSteps = parseInt(prompt("Gradient steps:", "4"));
+    blendIfSpan = Math.round(255 / gradientSteps);
     
     // Preparation before running the main script
     try {
         activeDocument.activeLayer = activeDocument.layers.getByName("Group 1").layerSets.getByName("Garment");
         grp_Garment = activeDocument.activeLayer;
     } catch(e) {
-        return alert("No Garment group found");
+        return;
+        // return alert("No Garment group found");
     }
     try {
         activeDocument.activeLayer = activeDocument.layers.getByName("Garment Colour Match");
         grp_Ref = activeDocument.activeLayer;
     } catch(e) {
-        return alert("No Garment Colour Match group found");
+        return;
+        // return alert("No Garment Colour Match group found");
     }
+
+    if (grp_Garment.layers.length != 0 && skipPopulated) {
+        if (saveJpgCheckFile) {
+            grp_Ref.visible = true;
+            var jpgDir = new Folder(activeDocument.path + "/_MatchCheck");
+            saveAsJPG(jpgDir, activeDocument.name.substring(0, activeDocument.name.lastIndexOf(".")));
+            grp_Ref.visible = showEndMatchRef;
+        }
+        return;
+    }
+    
     if (grp_Garment.layers.length != 0) {
         for (i = 0; i < grp_Garment.layers.length; i++) {
             grp_Garment.layers[i].visible = false;
@@ -345,12 +362,6 @@ function main() {
         lyr_GrpSamplesRef.remove();
         grp_Ref.visible = showEndMatchRef;
     }
-    if (saveJpgCheckFile) {
-        grp_Ref.visible = true;
-        var jpgDir = new Folder(activeDocument.path + "/_MatchCheck");
-        saveAsJPG(jpgDir, activeDocument.name.substring(0, activeDocument.name.lastIndexOf(".")));
-        grp_Ref.visible = showEndMatchRef;
-    }
 
     /////////////////////////////////////
     ///////// ADDITIONAL LAYERS /////////
@@ -418,6 +429,13 @@ function main() {
     deleteMask();
     adjustCurves([[0, 50], [255, 205]]);
     activeDocument.activeLayer.opacity = 0.0;
+
+    if (saveJpgCheckFile) {
+        grp_Ref.visible = true;
+        var jpgDir = new Folder(activeDocument.path + "/_MatchCheck");
+        saveAsJPG(jpgDir, activeDocument.name.substring(0, activeDocument.name.lastIndexOf(".")));
+        grp_Ref.visible = showEndMatchRef;
+    }
 
 }
 
@@ -611,10 +629,12 @@ function getSpanWeight(thisBlack, thisWhite, underBlack, underWhite) {
     grp_TempWeight.merge();
 
     // Average
-    layerSelection();
-    var idAvrg = charIDToTypeID( "Avrg" );
-    executeAction( idAvrg, undefined, DialogModes.NO );
-    activeDocument.selection.deselect();
+    try {
+        layerSelection();
+        var idAvrg = charIDToTypeID( "Avrg" );
+        executeAction( idAvrg, undefined, DialogModes.NO );
+        activeDocument.selection.deselect();
+    } catch(e) {}
 
     getSample();
     return (cleanRGB[0] / 255) * 100; // Return value from 0-100
@@ -672,15 +692,30 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     var idAvrg = charIDToTypeID( "Avrg" );
     executeAction( idAvrg, undefined, DialogModes.NO );
     activeDocument.selection.deselect();
+
+    try {
+        alignCenter();
+    } catch(e) {
+        return [0, 0, 0];
+    }
     
+    var squareSize = 20;
     var centerX = activeDocument.width.as('pt') / 2;
     var centerY = activeDocument.height.as('pt') / 2;
-    var squareSize = 20;
-    var left = Math.round(centerX - (squareSize / 2));
+    var left = 0;
     var top = Math.round(centerY - (squareSize / 2));
-    var right = Math.round(centerX + (squareSize / 2));
+    var right = Math.round(activeDocument.width.as('pt'));
     var bottom = Math.round(centerY + (squareSize / 2));
     makePointSelection([[left, top],[right, top],[right, bottom], [left, bottom]], 0, SelectionType.REPLACE);
+
+    var centerX = activeDocument.width.as('pt') / 2;
+    var centerY = activeDocument.height.as('pt') / 2;
+    var left = Math.round(centerX - (squareSize / 2));
+    var top = 0;
+    var right = Math.round(centerX + (squareSize / 2));
+    var bottom = Math.round(activeDocument.height.as('pt'));
+    makePointSelection([[left, top],[right, top],[right, bottom], [left, bottom]], 0, SelectionType.EXTEND);
+
     layerSelectionDiminish();
 
     try {
