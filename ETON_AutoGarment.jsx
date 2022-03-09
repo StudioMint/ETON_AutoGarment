@@ -21,7 +21,8 @@ var samplesRef = [];
 var samplesRefBrightness = [];
 var samplesGarm = [];
 var samplesGarmBrightness = [];
-var spanWeight = [];
+var spanWeightGarm = [];
+var spanWeightRef = [];
 var grp_Garment;
 var grp_Ref;
 var cleanRGB;
@@ -31,6 +32,9 @@ var brightnessSteps = 1; // Max 3 (Max 1 atm bcuz tricky..)
 var blendIfSpanBrightness = Math.round(255 / brightnessSteps);
 var brightnessBlendCap = 0;
 var garmentSize; // 0.0-1.0 - If 0.0 then garment bounds fill the whole canvas
+var refSize;
+var addVibrance = false;
+var addAdditional = false;
 
 var troubleshoot = false;
 var showEndMatchRef = false;
@@ -56,7 +60,8 @@ function init() {
     // Preparation before running the main script
     try {
         activeDocument.activeLayer = activeDocument.layers.getByName("Group 1").layerSets.getByName("Garment");
-        grp_Garment = activeDocument.activeLayer;
+        grp_Garment = activeDocument.activeLayer.layerSets.add();
+        grp_Garment.name = "Scripted matching";
     } catch(e) {
         return;
         // return alert("No Garment group found");
@@ -85,7 +90,7 @@ function init() {
         }
     }
 
-    activeDocument.activeLayer = grp_Garment;
+    activeDocument.activeLayer = grp_Garment.parent;
     selectionFromMask();
     var pixelsWidth = activeDocument.selection.bounds[2].value - activeDocument.selection.bounds[0].value;
     var pixelsHeight = activeDocument.selection.bounds[3].value - activeDocument.selection.bounds[1].value;
@@ -115,6 +120,14 @@ function main() {
     activeDocument.selection.contract(new UnitValue (30, "px"));
     makePointSelection([[0, 0],[activeDocument.width.as('pt'), 0],[activeDocument.width.as('pt'), lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')], [0, lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')]], 0, SelectionType.DIMINISH);
     makePointSelection([[0, ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[0].as('pt'), ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[1].as('pt'), activeDocument.height.as('pt')], [0, activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
+    
+    var pixelsWidth = activeDocument.selection.bounds[2].value - activeDocument.selection.bounds[0].value;
+    var pixelsHeight = activeDocument.selection.bounds[3].value - activeDocument.selection.bounds[1].value;
+    var pixelsArea = pixelsWidth * pixelsHeight;
+    refSize = 1 - (pixelsArea / ((activeDocument.activeLayer.bounds[2].value - activeDocument.activeLayer.bounds[0].value) * (activeDocument.activeLayer.bounds[3].value - activeDocument.activeLayer.bounds[1].value)));
+
+    // var btnWidth = 20;
+    // makePointSelection([[(lyrWidthInPt / 2) - (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), 0],[(lyrWidthInPt / 2) + (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), 0],[(lyrWidthInPt / 2) + (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), activeDocument.height.as('pt')], [(lyrWidthInPt / 2) - (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
     activeDocument.selection.copy();
     grp_Ref.visible = false;
     var lyr_MatchGrp = activeDocument.layerSets.add();
@@ -127,7 +140,7 @@ function main() {
     moveLayerUpOrDown("Down");
 
     // ----- Create cutout for garment -----
-    activeDocument.activeLayer = grp_Garment;
+    activeDocument.activeLayer = grp_Garment.parent;
     var garmentMaskFeather = grp_Garment.filterMaskFeather;
     grp_Garment.filterMaskFeather = 0.0;
     // Selection from garment mask
@@ -158,7 +171,9 @@ function main() {
     adjustVibrance(-100);
     activeDocument.activeLayer.merge();
     brightnessBlendCap = (averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255])[0]) - 40;
-    if (brightnessBlendCap < 0) brightnessBlendCap = 0;
+    if (brightnessBlendCap < 0 || brightnessBlendCap > 100) brightnessBlendCap = 0;
+    // if (brightnessBlendCap > 100) brightnessBlendCap = 100;
+    // brightnessBlendCap = 0;
     app.activeDocument.activeHistoryState = preBrightnessCap;
 
     for (i = 0; i < brightnessSteps; i++) {
@@ -259,6 +274,10 @@ function main() {
     lyr_Curves.visible = false;
     for (i = 0; i < gradientSteps; i++) {
         activeDocument.activeLayer = lyr_AutoRef;
+        var preGetWeight = app.activeDocument.activeHistoryState;
+        spanWeightRef.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        app.activeDocument.activeHistoryState = preGetWeight;
+        activeDocument.activeLayer = lyr_AutoRef;
         var preBlendIf = app.activeDocument.activeHistoryState;
         samplesRef.push(averageBlendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
         app.activeDocument.activeHistoryState = preBlendIf;
@@ -283,7 +302,7 @@ function main() {
     for (i = 0; i < gradientSteps; i++) {
         activeDocument.activeLayer = lyr_AutoGarmTemp;
         var preGetWeight = app.activeDocument.activeHistoryState;
-        spanWeight.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        spanWeightGarm.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
         app.activeDocument.activeHistoryState = preGetWeight;
         var preBlendIf = app.activeDocument.activeHistoryState;
         samplesGarm.push(averageBlendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
@@ -367,7 +386,7 @@ function main() {
     ///////// ADDITIONAL LAYERS /////////
     /////////////////////////////////////
 
-    // Add vibrance layers
+    // Set weight and add vibrance layers
     var blendIfSpanGrad = blendIfSpan + (blendIfSpan / gradientSteps);
     for (i = 0; i < gradientSteps; i++) {
 
@@ -383,7 +402,11 @@ function main() {
         deleteMask();
         blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
 
-        var weightedOpacity = (40 + spanWeight[i] * (1 + garmentSize));
+        // alert("Span #" + i + ":\nGarm " + spanWeightGarm[i] + "\nRef " + spanWeightRef[i]);
+        // TODO: The span weight in ref layer need to influence the opacity too (atm spanWeightRef[i] gets its values too low)
+        var weightGarm = (40 + spanWeightGarm[i] * (1 + garmentSize));
+        var weightRef = (40 + spanWeightRef[i] * (1 + refSize));
+        var weightedOpacity = weightGarm;
         if (weightedOpacity > 100.00) weightedOpacity = 100.00;
         chMxArray[i].opacity = weightedOpacity;
         if (weightedOpacity == 40.00) {
@@ -392,43 +415,47 @@ function main() {
             chMxArray[i].visible = false;
         }
 
-        createVibrance();
-        adjustVibrance(-100);
-        blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
-        activeDocument.activeLayer.name = "Vibrance (" + (blendIfSpan * i) + "-" + (blendIfSpan * (i + 1)) + ")";
+        if (addVibrance) {
+            createVibrance();
+            adjustVibrance(-100);
+            blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
+            activeDocument.activeLayer.name = "Vibrance (" + (blendIfSpan * i) + "-" + (blendIfSpan * (i + 1)) + ")";
 
-        activeDocument.activeLayer.opacity = 0.0;
-        deleteMask();
-        if (weightedOpacity == 40.00) {
-            functionLayerColour("grey");
-            activeDocument.activeLayer.visible = false;
+            activeDocument.activeLayer.opacity = 0.0;
+            deleteMask();
+            if (weightedOpacity == 40.00) {
+                functionLayerColour("grey");
+                activeDocument.activeLayer.visible = false;
+            }
         }
 
     }
 
-    // Add "Raise Black Point" adjustment layer
-    activeDocument.activeLayer = lyr_Curves;
-    createCurves();
-    activeDocument.activeLayer.name = "Raise Black Point";
-    deleteMask();
-    adjustCurves([[0, 50], [255, 255]]);
-    activeDocument.activeLayer.opacity = 0.0;
+    if (addAdditional) {
+        // Add "Raise Black Point" adjustment layer
+        activeDocument.activeLayer = lyr_Curves;
+        createCurves();
+        activeDocument.activeLayer.name = "Raise Black Point";
+        deleteMask();
+        adjustCurves([[0, 50], [255, 255]]);
+        activeDocument.activeLayer.opacity = 0.0;
 
-    // Add "Lower White Point" adjustment layer
-    activeDocument.activeLayer = lyr_Curves;
-    createCurves();
-    activeDocument.activeLayer.name = "Lower White Point";
-    deleteMask();
-    adjustCurves([[0, 0], [255, 205]]);
-    activeDocument.activeLayer.opacity = 0.0;
+        // Add "Lower White Point" adjustment layer
+        activeDocument.activeLayer = lyr_Curves;
+        createCurves();
+        activeDocument.activeLayer.name = "Lower White Point";
+        deleteMask();
+        adjustCurves([[0, 0], [255, 205]]);
+        activeDocument.activeLayer.opacity = 0.0;
 
-    // Add "Less Contrast" adjustment layer
-    activeDocument.activeLayer = lyr_Curves;
-    createCurves();
-    activeDocument.activeLayer.name = "Less Contrast";
-    deleteMask();
-    adjustCurves([[0, 50], [255, 205]]);
-    activeDocument.activeLayer.opacity = 0.0;
+        // Add "Less Contrast" adjustment layer
+        activeDocument.activeLayer = lyr_Curves;
+        createCurves();
+        activeDocument.activeLayer.name = "Less Contrast";
+        deleteMask();
+        adjustCurves([[0, 50], [255, 205]]);
+        activeDocument.activeLayer.opacity = 0.0;
+    }
 
     if (saveJpgCheckFile) {
         grp_Ref.visible = true;
@@ -650,6 +677,7 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     try {
         if (activeDocument.selection.bounds) activeDocument.selection.clear();
     } catch(e) {
+        // if (troubleshoot) alert("Could not delete any pixels");
         return [0, 0, 0];
     }
     activeDocument.selection.deselect();
@@ -658,9 +686,10 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     try {
         alignCenter();
     } catch(e) {
+        // if (troubleshoot) alert("Could not center layer (first)");
         return [0, 0, 0];
     }
-
+    
     // Average
     layerSelection();
     var idAvrg = charIDToTypeID( "Avrg" );
@@ -696,6 +725,7 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     try {
         alignCenter();
     } catch(e) {
+        // if (troubleshoot) alert("Could not center layer (seccond)");
         return [0, 0, 0];
     }
     
