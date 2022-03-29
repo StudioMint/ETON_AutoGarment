@@ -14,7 +14,13 @@ app.displayDialogs = DialogModes.NO;
 // VARIABLES
 
 var lyr_GrpSamplesGarm, lyr_SamplerCheck, lyr_FillAuto;
-var minimumFilter = 50;
+
+var minimumFilter = 100; // Expansion with Minimum
+var caCrossSize = 30; // Content aware square size
+var vibranceLyr = true; // Creates a Vibrance layer instead of desaturate()
+var gradientSteps = 5; // Max 5
+var brightnessSteps = 1; // Max 3 (Max 1 atm bcuz tricky..)
+
 var samplesArrayRGB = [];
 var samplesArrayBrightness = [];
 var samplesRef = [];
@@ -25,14 +31,14 @@ var spanWeightGarm = [];
 var spanWeightRef = [];
 var grp_Garment;
 var grp_Ref;
+var garmentType = undefined;
 var cleanRGB;
-var gradientSteps = 5; // Max 5
 var blendIfSpan;
-var brightnessSteps = 1; // Max 3 (Max 1 atm bcuz tricky..)
 var blendIfSpanBrightness = Math.round(255 / brightnessSteps);
 var brightnessBlendCap = 0;
 var garmentSize; // 0.0-1.0 - If 0.0 then garment bounds fill the whole canvas
 var refSize;
+var refAngle;
 var addVibrance = false;
 var addAdditional = false;
 
@@ -40,9 +46,11 @@ var troubleshoot = false;
 var showEndMatchRef = false;
 var saveJpgCheckFile = true;
 var skipPopulated = true;
+var errorLog = [];
 
 try {
     init();
+    if (errorLog.length > 0) alert(errorLog);
 } catch(e) {
     alert("Error code " + e.number + " (line " + e.line + "):\n" + e);
 }
@@ -63,6 +71,7 @@ function init() {
         grp_Garment = activeDocument.activeLayer.layerSets.add();
         grp_Garment.name = "Scripted matching";
     } catch(e) {
+        errorLog.push(activeDocument.name + ": No Garment group found");
         return;
         // return alert("No Garment group found");
     }
@@ -70,6 +79,7 @@ function init() {
         activeDocument.activeLayer = activeDocument.layers.getByName("Garment Colour Match");
         grp_Ref = activeDocument.activeLayer;
     } catch(e) {
+        errorLog.push(activeDocument.name + ": No Garment Colour Match group found");
         return;
         // return alert("No Garment Colour Match group found");
     }
@@ -89,7 +99,13 @@ function init() {
             grp_Garment.layers[i].visible = false;
         }
     }
-
+    
+    switch (grp_Ref.layers[0].name.substring(0, 3)) {
+        case "tsh": garmentType = "shirt"; break;
+        case "tss": garmentType = "shorts"; break;
+    }
+    refAngle = grp_Ref.layers[0].name;
+    
     activeDocument.activeLayer = grp_Garment.parent;
     selectionFromMask();
     var pixelsWidth = activeDocument.selection.bounds[2].value - activeDocument.selection.bounds[0].value;
@@ -98,6 +114,8 @@ function init() {
     garmentSize = 1 - (pixelsArea / (activeDocument.width.value * activeDocument.height.value));
     activeDocument.selection.deselect();
     
+    activeDocument.colorSamplers.removeAll();
+
     main();
 
 }
@@ -118,9 +136,16 @@ function main() {
     // Select Subject
     selectSubject(false);
     activeDocument.selection.contract(new UnitValue (30, "px"));
-    makePointSelection([[0, 0],[activeDocument.width.as('pt'), 0],[activeDocument.width.as('pt'), lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')], [0, lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')]], 0, SelectionType.DIMINISH);
-    makePointSelection([[0, ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[0].as('pt'), ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[1].as('pt'), activeDocument.height.as('pt')], [0, activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
-    
+    // Adjust selection
+    switch (garmentType) {
+        case "shirt":
+            if (refAngle == "tshov_1") {
+                makePointSelection([[0, 0],[activeDocument.width.as('pt'), 0],[activeDocument.width.as('pt'), lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')], [0, lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')]], 0, SelectionType.DIMINISH);
+                makePointSelection([[0, ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[0].as('pt'), ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[1].as('pt'), activeDocument.height.as('pt')], [0, activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
+            }
+            break;
+    }
+
     var pixelsWidth = activeDocument.selection.bounds[2].value - activeDocument.selection.bounds[0].value;
     var pixelsHeight = activeDocument.selection.bounds[3].value - activeDocument.selection.bounds[1].value;
     var pixelsArea = pixelsWidth * pixelsHeight;
@@ -167,21 +192,31 @@ function main() {
     // Set brightness cap
     activeDocument.activeLayer = lyr_AutoRef;
     var preBrightnessCap = app.activeDocument.activeHistoryState;
-    createVibrance();
-    adjustVibrance(-100);
-    activeDocument.activeLayer.merge();
-    brightnessBlendCap = (averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255])[0]) - 40;
-    if (brightnessBlendCap < 0 || brightnessBlendCap > 100) brightnessBlendCap = 0;
-    // if (brightnessBlendCap > 100) brightnessBlendCap = 100;
+    if (vibranceLyr) {
+        createVibrance();
+        adjustVibrance(-100);
+        activeDocument.activeLayer.merge();
+    } else {
+        activeDocument.activeLayer.desaturate();
+    }
+    brightnessBlendCap = (averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255])[0]) - 20;
+    // return alert(brightnessBlendCap);
+    // if (brightnessBlendCap < 0 || brightnessBlendCap > 100) brightnessBlendCap = 0;
+    if (brightnessBlendCap < 0 || brightnessBlendCap < 25) brightnessBlendCap = 0;
+    // if (brightnessBlendCap > 120) brightnessBlendCap = 120;
     // brightnessBlendCap = 0;
     app.activeDocument.activeHistoryState = preBrightnessCap;
 
     for (i = 0; i < brightnessSteps; i++) {
         activeDocument.activeLayer = lyr_AutoRef;
         var preBlendIf = app.activeDocument.activeHistoryState;
-        createVibrance();
-        adjustVibrance(-100);
-        activeDocument.activeLayer.merge();
+        if (vibranceLyr) {
+            createVibrance();
+            adjustVibrance(-100);
+            activeDocument.activeLayer.merge();
+        } else {
+            activeDocument.activeLayer.desaturate();
+        }
         samplesRefBrightness.push(averageBlendIf([brightnessBlendCap, brightnessBlendCap], [255, 255], [0, 0], [255, 255]));
         app.activeDocument.activeHistoryState = preBlendIf;
     }
@@ -192,9 +227,13 @@ function main() {
     for (i = 0; i < brightnessSteps; i++) {
         activeDocument.activeLayer = lyr_AutoGarm;
         var preBlendIf = app.activeDocument.activeHistoryState;
-        createVibrance();
-        adjustVibrance(-100);
-        activeDocument.activeLayer.merge();
+        if (vibranceLyr) {
+            createVibrance();
+            adjustVibrance(-100);
+            activeDocument.activeLayer.merge();
+        } else {
+            activeDocument.activeLayer.desaturate();
+        }
         samplesGarmBrightness.push(averageBlendIf([brightnessBlendCap, brightnessBlendCap], [255, 255], [0, 0], [255, 255]));
         if (samplesGarmBrightness[i][0] == 0 && samplesGarmBrightness[i][1] == 0 && samplesGarmBrightness[i][2] == 0) samplesGarmBrightness[i] = samplesRefBrightness[i];
         app.activeDocument.activeHistoryState = preBlendIf;
@@ -402,14 +441,25 @@ function main() {
         deleteMask();
         blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
 
+        function getBaseLog(x, y) {
+            return Math.log(y) / Math.log(x);
+        }
         // alert("Span #" + i + ":\nGarm " + spanWeightGarm[i] + "\nRef " + spanWeightRef[i]);
         // TODO: The span weight in ref layer need to influence the opacity too (atm spanWeightRef[i] gets its values too low)
-        var weightGarm = (40 + spanWeightGarm[i] * (1 + garmentSize));
-        var weightRef = (40 + spanWeightRef[i] * (1 + refSize));
+        // This is a bit fucked.. needs to be able to go below 40%. A lot of shadows become grey due to the low cap on 40
+        var weightGarm = ((getBaseLog(100, spanWeightGarm[i] * (1 + garmentSize)) * 100) / 3) * 2;
+        if (!isFinite(weightGarm)) weightGarm = 10;
+        // alert(weightGarm)
+        // if (!weightGarm) weightGarm = 0;
+        // var weightGarm = (40 + spanWeightGarm[i] * (1 + garmentSize));
+        // var weightRef = (40 + spanWeightRef[i] * (1 + refSize));
+        // alert(i + " garm: " + spanWeightGarm[i])
+        // alert(i + " ref: " + spanWeightRef[i])
         var weightedOpacity = weightGarm;
         if (weightedOpacity > 100.00) weightedOpacity = 100.00;
+        if (weightedOpacity < 0.00) weightedOpacity = 0.00;
         chMxArray[i].opacity = weightedOpacity;
-        if (weightedOpacity == 40.00) {
+        if (weightedOpacity == 0.00) {
             chMxArray[i].opacity = 0.0;
             functionLayerColour("grey");
             chMxArray[i].visible = false;
@@ -729,20 +779,19 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
         return [0, 0, 0];
     }
     
-    var squareSize = 20;
     var centerX = activeDocument.width.as('pt') / 2;
     var centerY = activeDocument.height.as('pt') / 2;
     var left = 0;
-    var top = Math.round(centerY - (squareSize / 2));
+    var top = Math.round(centerY - (caCrossSize / 2));
     var right = Math.round(activeDocument.width.as('pt'));
-    var bottom = Math.round(centerY + (squareSize / 2));
+    var bottom = Math.round(centerY + (caCrossSize / 2));
     makePointSelection([[left, top],[right, top],[right, bottom], [left, bottom]], 0, SelectionType.REPLACE);
 
     var centerX = activeDocument.width.as('pt') / 2;
     var centerY = activeDocument.height.as('pt') / 2;
-    var left = Math.round(centerX - (squareSize / 2));
+    var left = Math.round(centerX - (caCrossSize / 2));
     var top = 0;
-    var right = Math.round(centerX + (squareSize / 2));
+    var right = Math.round(centerX + (caCrossSize / 2));
     var bottom = Math.round(activeDocument.height.as('pt'));
     makePointSelection([[left, top],[right, top],[right, bottom], [left, bottom]], 0, SelectionType.EXTEND);
 
