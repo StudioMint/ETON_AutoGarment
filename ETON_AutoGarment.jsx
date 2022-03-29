@@ -50,9 +50,9 @@ var errorLog = [];
 
 try {
     init();
-    if (errorLog.length > 0) alert(errorLog);
+    if (errorLog.length > 0 && troubleshoot) alert(errorLog);
 } catch(e) {
-    alert("Error code " + e.number + " (line " + e.line + "):\n" + e);
+    if (troubleshoot) alert("Error code " + e.number + " (line " + e.line + "):\n" + e);
 }
 
 // Reset the ruler
