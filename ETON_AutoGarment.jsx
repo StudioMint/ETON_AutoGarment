@@ -13,11 +13,14 @@ app.displayDialogs = DialogModes.NO;
 
 // VARIABLES
 
-var lyr_GrpSamplesGarm, lyr_SamplerCheck, lyr_FillAuto;
+var lyr_GrpSamplesGarm, lyr_GrpSamplesRef, lyr_SamplerCheck, lyr_FillAuto;
 
 var minimumFilter = 100; // Expansion with Minimum
+var minimumSteps = 8; // Steps of gradually adding Minimum
+minimumFilter = minimumFilter / minimumSteps;
 var caCrossSize = 30; // Content aware square size
 var vibranceLyr = true; // Creates a Vibrance layer instead of desaturate()
+var brightnessBlendCapReduction = 20; // Steps below the average value of brightness
 var gradientSteps = 5; // Max 5
 var brightnessSteps = 1; // Max 3 (Max 1 atm bcuz tricky..)
 
@@ -34,13 +37,14 @@ var grp_Ref;
 var garmentType = undefined;
 var cleanRGB;
 var blendIfSpan;
-var blendIfSpanBrightness = Math.round(255 / brightnessSteps);
+var blendIfSpanBrightness;
 var brightnessBlendCap = 0;
 var garmentSize; // 0.0-1.0 - If 0.0 then garment bounds fill the whole canvas
 var refSize;
 var refAngle;
 var addVibrance = false;
 var addAdditional = false;
+var getWeight = false;
 
 var troubleshoot = false;
 var showEndMatchRef = false;
@@ -64,12 +68,12 @@ function init() {
 
     //gradientSteps = parseInt(prompt("Gradient steps:", "4"));
     blendIfSpan = Math.round(255 / gradientSteps);
+    blendIfSpanBrightness = Math.round(255 / brightnessSteps);
     
     // Preparation before running the main script
     try {
         activeDocument.activeLayer = activeDocument.layers.getByName("Group 1").layerSets.getByName("Garment");
-        grp_Garment = activeDocument.activeLayer.layerSets.add();
-        grp_Garment.name = "Scripted matching";
+        grp_Garment = activeDocument.activeLayer;
     } catch(e) {
         errorLog.push(activeDocument.name + ": No Garment group found");
         return;
@@ -84,6 +88,8 @@ function init() {
         // return alert("No Garment Colour Match group found");
     }
 
+    grp_Garment = grp_Garment.layerSets.add();
+    grp_Garment.name = "Scripted matching";
     if (grp_Garment.layers.length != 0 && skipPopulated) {
         if (saveJpgCheckFile) {
             grp_Ref.visible = true;
@@ -142,6 +148,8 @@ function main() {
             if (refAngle == "tshov_1") {
                 makePointSelection([[0, 0],[activeDocument.width.as('pt'), 0],[activeDocument.width.as('pt'), lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')], [0, lyrHeightInPt / 3 + activeDocument.activeLayer.bounds[1].as('pt')]], 0, SelectionType.DIMINISH);
                 makePointSelection([[0, ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[0].as('pt'), ((lyrHeightInPt / 3) * 2) + activeDocument.activeLayer.bounds[1].as('pt')],[((lyrWidthInPt / 5) * 2.2) + activeDocument.activeLayer.bounds[1].as('pt'), activeDocument.height.as('pt')], [0, activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
+                var btnWidth = 20;
+                makePointSelection([[(lyrWidthInPt / 2) - (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), 0],[(lyrWidthInPt / 2) + (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), 0],[(lyrWidthInPt / 2) + (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), activeDocument.height.as('pt')], [(lyrWidthInPt / 2) - (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
             }
             break;
     }
@@ -151,8 +159,6 @@ function main() {
     var pixelsArea = pixelsWidth * pixelsHeight;
     refSize = 1 - (pixelsArea / ((activeDocument.activeLayer.bounds[2].value - activeDocument.activeLayer.bounds[0].value) * (activeDocument.activeLayer.bounds[3].value - activeDocument.activeLayer.bounds[1].value)));
 
-    // var btnWidth = 20;
-    // makePointSelection([[(lyrWidthInPt / 2) - (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), 0],[(lyrWidthInPt / 2) + (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), 0],[(lyrWidthInPt / 2) + (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), activeDocument.height.as('pt')], [(lyrWidthInPt / 2) - (btnWidth / 2) + activeDocument.activeLayer.bounds[0].as('pt'), activeDocument.height.as('pt')]], 0, SelectionType.DIMINISH);
     activeDocument.selection.copy();
     grp_Ref.visible = false;
     var lyr_MatchGrp = activeDocument.layerSets.add();
@@ -179,16 +185,101 @@ function main() {
     activeDocument.activeLayer.name = "Auto - Garment";
     alignCenter();
 
-    ///////////////////////////////////////
-    ///////// SAMPLE - BRIGHTNESS /////////
-    ///////////////////////////////////////
+    ///////////////////////////////////////////////
+    ///////// CAP, WHITE POINT AND WEIGHT /////////
+    ///////////////////////////////////////////////
 
+    var histIndexRef;
+    var histIndexGarm;
+
+    lyr_AutoGarm.visible = false;
+    lyr_AutoRef.visible = true;
+    activeDocument.activeLayer = lyr_AutoRef;
+    var preWhitepoint = app.activeDocument.activeHistoryState;
+    activeDocument.activeLayer.desaturate();
+    layerSelection();
+    var hisRange = 5;
+    var hisCount = 0;
+    var his = activeDocument.histogram;
+    for (var i = his.length - 1; i >= (hisRange - 1); i--) {
+        for (i_range = 0; i_range < hisRange; i_range++) {
+            if (his[i - i_range] < his[(i - i_range) - 1]) {
+                hisCount++;
+            } else {
+                hisCount = 0;
+                break;
+            }
+        }
+        if (hisCount == hisRange) break;
+    }
+    histIndexRef = i - hisRange;
+    activeDocument.selection.deselect();
+
+    lyr_AutoGarm.visible = true;
+    lyr_AutoRef.visible = false;
+    activeDocument.activeLayer = lyr_AutoGarm;
+    activeDocument.activeLayer.desaturate();
+    layerSelection();
+    var hisCount = 0;
+    var his = activeDocument.histogram;
+    for (var i = his.length - 1; i >= (hisRange - 1); i--) {
+        for (i_range = 0; i_range < hisRange; i_range++) {
+            if (his[i - i_range] < his[(i - i_range) - 1]) {
+                hisCount++;
+            } else {
+                hisCount = 0;
+                break;
+            }
+        }
+        if (hisCount == hisRange) break;
+    }
+    histIndexGarm = i - hisRange;
+    activeDocument.selection.deselect();
+    
+    app.activeDocument.activeHistoryState = preWhitepoint;
+    var whitePointAdjust = histIndexGarm - histIndexRef;
+    if (troubleshoot) {
+        alert(histIndexRef);
+        alert(histIndexGarm);
+        alert(histIndexGarm - histIndexRef);
+    }
+    
+    // Create Samples Garment
+    lyr_GrpSamplesGarm = activeDocument.layerSets.add();
+    lyr_GrpSamplesGarm.name = "Auto - Samples Garment";
+    activeDocument.activeLayer = lyr_GrpSamplesGarm;
+    functionLayerColour("none");
+
+    // Create levels adjustment layer
+    createLevels();
+    var lyr_Levels = activeDocument.activeLayer;
+    lyr_Levels.name = "Garment white point";
+    deleteMask();
+    lyr_GrpSamplesGarm.artLayers.add();
+    var lyr_UnderLevels = activeDocument.activeLayer;
+    moveLayerUpOrDown("Down");
+
+    activeDocument.activeLayer = lyr_Levels;
+    adjustLevels("whiteblackpoint", [0, 255 - whitePointAdjust]);
+
+    var lyr_tempLevels = lyr_Levels.duplicate(lyr_AutoGarm, ElementPlacement.PLACEBEFORE);
+    var grp_Temp = activeDocument.layerSets.add();
+    grp_Temp.move(lyr_tempLevels, ElementPlacement.PLACEBEFORE);
+    lyr_AutoGarm.duplicate(grp_Temp, ElementPlacement.INSIDE);
+    lyr_tempLevels.move(grp_Temp, ElementPlacement.INSIDE);
+    activeDocument.activeLayer = grp_Temp;
+    grp_Temp.merge();
+    activeDocument.activeLayer.name = lyr_AutoGarm.name;
+    activeDocument.activeLayer.move(lyr_AutoGarm, ElementPlacement.PLACEBEFORE);
+    lyr_AutoGarm.remove();
+    var lyr_AutoGarm = activeDocument.activeLayer;
+
+    lyr_Levels.visible = false;
+
+    // Create sampler check layer
     lyr_SamplerCheck = activeDocument.artLayers.add();
     lyr_SamplerCheck.name = "Sampler Check";
 
-    // Get brightness sample for Ref
-    lyr_AutoGarm.visible = false;
-    lyr_AutoRef.visible = true;
     // Set brightness cap
     activeDocument.activeLayer = lyr_AutoRef;
     var preBrightnessCap = app.activeDocument.activeHistoryState;
@@ -199,13 +290,55 @@ function main() {
     } else {
         activeDocument.activeLayer.desaturate();
     }
-    brightnessBlendCap = (averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255])[0]) - 20;
-    // return alert(brightnessBlendCap);
-    // if (brightnessBlendCap < 0 || brightnessBlendCap > 100) brightnessBlendCap = 0;
+    brightnessBlendCap = (averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255])[0]) - brightnessBlendCapReduction;
     if (brightnessBlendCap < 0 || brightnessBlendCap < 25) brightnessBlendCap = 0;
-    // if (brightnessBlendCap > 120) brightnessBlendCap = 120;
-    // brightnessBlendCap = 0;
     app.activeDocument.activeHistoryState = preBrightnessCap;
+
+    // Get weight for Ref
+    lyr_AutoRef.visible = true;
+    lyr_AutoGarm.visible = false;
+    for (i = 0; i < gradientSteps; i++) {
+        activeDocument.activeLayer = lyr_AutoRef;
+        var preGetWeight = app.activeDocument.activeHistoryState;
+        spanWeightRef.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        app.activeDocument.activeHistoryState = preGetWeight;
+    }
+
+    // Get weight for Garm
+    lyr_AutoRef.visible = false;
+    lyr_AutoGarm.visible = true;
+    for (i = 0; i < gradientSteps; i++) {
+        activeDocument.activeLayer = lyr_AutoGarm;
+        var preGetWeight = app.activeDocument.activeHistoryState;
+        spanWeightGarm.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        app.activeDocument.activeHistoryState = preGetWeight;
+    }
+
+
+
+    // function arrayAvg(myArray) {
+    //     var i = 0, summ = 0, ArrayLen = myArray.length;
+    //     while (i < ArrayLen) {
+    //         summ = summ + myArray[i++];
+    //     }
+    //     return summ / ArrayLen;
+    // }
+    
+    // alert(spanWeightRef)
+    // alert(arrayAvg(spanWeightRef))
+    // brightnessBlendCap = (255 - arrayAvg(spanWeightRef)) / 2;
+    // alert(brightnessBlendCap)
+
+
+
+
+    ///////////////////////////////////////
+    ///////// SAMPLE - BRIGHTNESS /////////
+    ///////////////////////////////////////
+
+    // Get brightness sample for Ref
+    lyr_AutoRef.visible = true;
+    lyr_AutoGarm.visible = false;
 
     for (i = 0; i < brightnessSteps; i++) {
         activeDocument.activeLayer = lyr_AutoRef;
@@ -217,7 +350,8 @@ function main() {
         } else {
             activeDocument.activeLayer.desaturate();
         }
-        samplesRefBrightness.push(averageBlendIf([brightnessBlendCap, brightnessBlendCap], [255, 255], [0, 0], [255, 255]));
+        samplesRefBrightness.push(averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255]));
+        // samplesRefBrightness.push(averageBlendIf([blendIfSpanBrightness * i, blendIfSpanBrightness * i], [blendIfSpanBrightness * (i + 1), blendIfSpanBrightness * (i + 1)], [0, 0], [255, 255]));
         app.activeDocument.activeHistoryState = preBlendIf;
     }
 
@@ -235,6 +369,7 @@ function main() {
             activeDocument.activeLayer.desaturate();
         }
         samplesGarmBrightness.push(averageBlendIf([brightnessBlendCap, brightnessBlendCap], [255, 255], [0, 0], [255, 255]));
+        // samplesGarmBrightness.push(averageBlendIf([blendIfSpanBrightness * i, blendIfSpanBrightness * i], [blendIfSpanBrightness * (i + 1), blendIfSpanBrightness * (i + 1)], [0, 0], [255, 255]));
         if (samplesGarmBrightness[i][0] == 0 && samplesGarmBrightness[i][1] == 0 && samplesGarmBrightness[i][2] == 0) samplesGarmBrightness[i] = samplesRefBrightness[i];
         app.activeDocument.activeHistoryState = preBlendIf;
     }
@@ -252,8 +387,7 @@ function main() {
     app.displayDialogs = DialogModes.NO;
     
     // Brightness swatches for garment
-    lyr_GrpSamplesGarm = activeDocument.layerSets.add();
-    lyr_GrpSamplesGarm.name = "Auto - Samples Garment";
+    activeDocument.activeLayer = lyr_UnderLevels;
     var sampleSize = 10;
     var sampleStartX = 0;
     var sampleStartY = 0;
@@ -264,7 +398,7 @@ function main() {
 
     // Brightness swatches for ref
     activeDocument.activeLayer = grp_Ref;
-    var lyr_GrpSamplesRef = activeDocument.layerSets.add();
+    lyr_GrpSamplesRef = activeDocument.layerSets.add();
     lyr_GrpSamplesRef.name = "Auto - Samples Reference";
     var sampleStartX = 10;
     var sampleStartY = 0;
@@ -287,6 +421,7 @@ function main() {
     deleteMask();
     lyr_GrpSamplesGarm.artLayers.add();
     var lyr_UnderCurves = activeDocument.activeLayer;
+    moveLayerUpOrDown("Down");
     moveLayerUpOrDown("Down");
 
     app.refresh();
@@ -311,11 +446,12 @@ function main() {
     lyr_AutoGarm.visible = false;
     lyr_AutoRef.visible = true;
     lyr_Curves.visible = false;
+    getWeight = true;
     for (i = 0; i < gradientSteps; i++) {
         activeDocument.activeLayer = lyr_AutoRef;
-        var preGetWeight = app.activeDocument.activeHistoryState;
-        spanWeightRef.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
-        app.activeDocument.activeHistoryState = preGetWeight;
+        // var preGetWeight = app.activeDocument.activeHistoryState;
+        // spanWeightRef.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        // app.activeDocument.activeHistoryState = preGetWeight;
         activeDocument.activeLayer = lyr_AutoRef;
         var preBlendIf = app.activeDocument.activeHistoryState;
         samplesRef.push(averageBlendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
@@ -340,14 +476,15 @@ function main() {
     
     for (i = 0; i < gradientSteps; i++) {
         activeDocument.activeLayer = lyr_AutoGarmTemp;
-        var preGetWeight = app.activeDocument.activeHistoryState;
-        spanWeightGarm.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
-        app.activeDocument.activeHistoryState = preGetWeight;
+        // var preGetWeight = app.activeDocument.activeHistoryState;
+        // spanWeightGarm.push(getSpanWeight([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
+        // app.activeDocument.activeHistoryState = preGetWeight;
         var preBlendIf = app.activeDocument.activeHistoryState;
         samplesGarm.push(averageBlendIf([blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)], [0, 0], [255, 255]));
         app.activeDocument.activeHistoryState = preBlendIf;
     }
 
+    getWeight = false;
     lyr_MatchGrp.remove();
     grp_Garment.filterMaskFeather = garmentMaskFeather;
 
@@ -398,6 +535,8 @@ function main() {
         blendIf([0, 0], [255, 255], [blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)]);
     }
 
+    lyr_Levels.visible = true;
+    lyr_Levels.move(grp_Garment, ElementPlacement.INSIDE);
     lyr_Curves.move(grp_Garment, ElementPlacement.INSIDE);
     app.refresh();
     
@@ -441,21 +580,24 @@ function main() {
         deleteMask();
         blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
 
-        function getBaseLog(x, y) {
-            return Math.log(y) / Math.log(x);
-        }
+        // function getBaseLog(x, y) {
+        //     return Math.log(y) / Math.log(x);
+        // }
         // alert("Span #" + i + ":\nGarm " + spanWeightGarm[i] + "\nRef " + spanWeightRef[i]);
         // TODO: The span weight in ref layer need to influence the opacity too (atm spanWeightRef[i] gets its values too low)
         // This is a bit fucked.. needs to be able to go below 40%. A lot of shadows become grey due to the low cap on 40
-        var weightGarm = ((getBaseLog(100, spanWeightGarm[i] * (1 + garmentSize)) * 100) / 3) * 2;
-        if (!isFinite(weightGarm)) weightGarm = 10;
+        // var weightGarm = ((getBaseLog(100, spanWeightGarm[i] * (1 + garmentSize)) * 100) / 3) * 2;
+        // if (!isFinite(weightGarm)) weightGarm = 10;
         // alert(weightGarm)
         // if (!weightGarm) weightGarm = 0;
         // var weightGarm = (40 + spanWeightGarm[i] * (1 + garmentSize));
         // var weightRef = (40 + spanWeightRef[i] * (1 + refSize));
         // alert(i + " garm: " + spanWeightGarm[i])
         // alert(i + " ref: " + spanWeightRef[i])
-        var weightedOpacity = weightGarm;
+        // var weightedOpacity = weightGarm;
+        var percentGarm = map(spanWeightGarm[i], 0.0, 255.0, 0.0, 100.0) + 10;
+        var percentRef = map(spanWeightRef[i], 0.0, 255.0, 0.0, 100.0) + 10;
+        var weightedOpacity = (percentGarm + percentRef) / 2;
         if (weightedOpacity > 100.00) weightedOpacity = 100.00;
         if (weightedOpacity < 0.00) weightedOpacity = 0.00;
         chMxArray[i].opacity = weightedOpacity;
@@ -659,9 +801,19 @@ function createSamples(coordinates, rgb, mode) {
 
 function getSpanWeight(thisBlack, thisWhite, underBlack, underWhite) {
 
+    app.preferences.rulerUnits = Units.PERCENT;
+    // lyr_GrpSamplesGarm.visible = false;
+    // lyr_GrpSamplesRef.visible = false;
+
+    var left = activeDocument.activeLayer.bounds[0].value;
+    var top = activeDocument.activeLayer.bounds[1].value;
+    var right = activeDocument.activeLayer.bounds[2].value;
+    var bottom = activeDocument.activeLayer.bounds[3].value;
+    activeDocument.activeLayer.resize(100 * (100 / (right - left)), 100 * (100 / (bottom - top)), AnchorPosition.MIDDLECENTER);
+    
     blendIf(thisBlack, thisWhite, underBlack, underWhite);
     colorRange("shadows", 0, 0);
-    activeDocument.selection.contract(new UnitValue (1, "px"));
+
     try {
         if (activeDocument.selection.bounds) activeDocument.selection.clear();
     } catch(e) {
@@ -699,6 +851,8 @@ function getSpanWeight(thisBlack, thisWhite, underBlack, underWhite) {
         desc1718.putBoolean( idpreserveTransparency, true );
     executeAction( idfill, desc1718, DialogModes.NO );
 
+    activeDocument.bitsPerChannel = BitsPerChannelType.SIXTEEN;
+
     var tempWeight = activeDocument.activeLayer;
     var grp_TempWeight = activeDocument.layerSets.add();
     lyr_FillAuto.move(grp_TempWeight, ElementPlacement.INSIDE);
@@ -712,9 +866,15 @@ function getSpanWeight(thisBlack, thisWhite, underBlack, underWhite) {
         executeAction( idAvrg, undefined, DialogModes.NO );
         activeDocument.selection.deselect();
     } catch(e) {}
+    app.preferences.rulerUnits = Units.PIXELS;
+    // lyr_GrpSamplesGarm.visible = true;
+    // lyr_GrpSamplesRef.visible = true;
 
     getSample();
-    return (cleanRGB[0] / 255) * 100; // Return value from 0-100
+
+    activeDocument.bitsPerChannel = BitsPerChannelType.EIGHT;
+
+    return cleanRGB[0];
 
 }
 
@@ -754,23 +914,37 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
     } catch(e) {}
     activeDocument.selection.deselect();
     
-    // Minimum
-    var idminimum = stringIDToTypeID( "minimum" );
-        var desc252 = new ActionDescriptor();
-        var idradius = stringIDToTypeID( "radius" );
-        var idpixelsUnit = stringIDToTypeID( "pixelsUnit" );
-        desc252.putUnitDouble( idradius, idpixelsUnit, minimumFilter );
-        var idpreserveShape = stringIDToTypeID( "preserveShape" );
-        var idpreserveShape = stringIDToTypeID( "preserveShape" );
-        var idsquareness = stringIDToTypeID( "squareness" );
-        desc252.putEnumerated( idpreserveShape, idpreserveShape, idsquareness );
-    executeAction( idminimum, desc252, DialogModes.NO );
-    
-    // Average
-    layerSelection();
-    var idAvrg = charIDToTypeID( "Avrg" );
-    executeAction( idAvrg, undefined, DialogModes.NO );
-    activeDocument.selection.deselect();
+    for (i_minimum = 0; i_minimum < minimumSteps; i_minimum++) {
+        minimumAverage();
+    }
+
+    function minimumAverage() {
+        // Minimum
+        var idminimum = stringIDToTypeID( "minimum" );
+            var desc252 = new ActionDescriptor();
+            var idradius = stringIDToTypeID( "radius" );
+            var idpixelsUnit = stringIDToTypeID( "pixelsUnit" );
+            desc252.putUnitDouble( idradius, idpixelsUnit, minimumFilter );
+            var idpreserveShape = stringIDToTypeID( "preserveShape" );
+            var idpreserveShape = stringIDToTypeID( "preserveShape" );
+            var idsquareness = stringIDToTypeID( "squareness" );
+            desc252.putEnumerated( idpreserveShape, idpreserveShape, idsquareness );
+        executeAction( idminimum, desc252, DialogModes.NO );
+        
+        // layerSelection();
+        // activeDocument.selection.contract(new UnitValue (1, "px"));
+        // activeDocument.selection.invert();
+        // try {
+        //     if (activeDocument.selection.bounds) activeDocument.selection.clear();
+        // } catch(e) {}
+        // activeDocument.selection.deselect();
+
+        // Average
+        layerSelection();
+        var idAvrg = charIDToTypeID( "Avrg" );
+        executeAction( idAvrg, undefined, DialogModes.NO );
+        activeDocument.selection.deselect();
+    }
 
     try {
         alignCenter();
@@ -778,7 +952,7 @@ function averageBlendIf(thisBlack, thisWhite, underBlack, underWhite) {
         // if (troubleshoot) alert("Could not center layer (seccond)");
         return [0, 0, 0];
     }
-    
+
     var centerX = activeDocument.width.as('pt') / 2;
     var centerY = activeDocument.height.as('pt') / 2;
     var left = 0;
@@ -1174,6 +1348,29 @@ function adjustVibrance(value) {
     executeAction( idset, desc484, DialogModes.NO );
 }
 
+function createLevels() {
+    var idmake = stringIDToTypeID( "make" );
+        var desc224 = new ActionDescriptor();
+        var idnull = stringIDToTypeID( "null" );
+            var ref1 = new ActionReference();
+            var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
+            ref1.putClass( idadjustmentLayer );
+        desc224.putReference( idnull, ref1 );
+        var idusing = stringIDToTypeID( "using" );
+            var desc225 = new ActionDescriptor();
+            var idtype = stringIDToTypeID( "type" );
+                var desc226 = new ActionDescriptor();
+                var idpresetKind = stringIDToTypeID( "presetKind" );
+                var idpresetKindType = stringIDToTypeID( "presetKindType" );
+                var idpresetKindDefault = stringIDToTypeID( "presetKindDefault" );
+                desc226.putEnumerated( idpresetKind, idpresetKindType, idpresetKindDefault );
+            var idlevels = stringIDToTypeID( "levels" );
+            desc225.putObject( idtype, idlevels, desc226 );
+        var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
+        desc224.putObject( idusing, idadjustmentLayer, desc225 );
+    executeAction( idmake, desc224, DialogModes.NO );
+}
+
 function createCurves() {
     var idmake = stringIDToTypeID( "make" );
         var desc951 = new ActionDescriptor();
@@ -1311,6 +1508,44 @@ function adjustLevels(section, value) {
                 var idlevels = stringIDToTypeID( "levels" );
                 desc115.putObject( idto, idlevels, desc116 );
             executeAction( idset, desc115, DialogModes.NO );
+            break;
+        case "whiteblackpoint":
+            var idset = stringIDToTypeID( "set" );
+                var desc235 = new ActionDescriptor();
+                var idnull = stringIDToTypeID( "null" );
+                    var ref2 = new ActionReference();
+                    var idadjustmentLayer = stringIDToTypeID( "adjustmentLayer" );
+                    var idordinal = stringIDToTypeID( "ordinal" );
+                    var idtargetEnum = stringIDToTypeID( "targetEnum" );
+                    ref2.putEnumerated( idadjustmentLayer, idordinal, idtargetEnum );
+                desc235.putReference( idnull, ref2 );
+                var idto = stringIDToTypeID( "to" );
+                    var desc236 = new ActionDescriptor();
+                    var idpresetKind = stringIDToTypeID( "presetKind" );
+                    var idpresetKindType = stringIDToTypeID( "presetKindType" );
+                    var idpresetKindCustom = stringIDToTypeID( "presetKindCustom" );
+                    desc236.putEnumerated( idpresetKind, idpresetKindType, idpresetKindCustom );
+                    var idadjustment = stringIDToTypeID( "adjustment" );
+                        var list4 = new ActionList();
+                            var desc237 = new ActionDescriptor();
+                            var idchannel = stringIDToTypeID( "channel" );
+                                var ref3 = new ActionReference();
+                                var idchannel = stringIDToTypeID( "channel" );
+                                var idchannel = stringIDToTypeID( "channel" );
+                                var idcomposite = stringIDToTypeID( "composite" );
+                                ref3.putEnumerated( idchannel, idchannel, idcomposite );
+                            desc237.putReference( idchannel, ref3 );
+                            var idoutput = stringIDToTypeID( "output" );
+                                var list5 = new ActionList();
+                                list5.putInteger( value[0] );
+                                list5.putInteger( value[1] );
+                            desc237.putList( idoutput, list5 );
+                        var idlevelsAdjustment = stringIDToTypeID( "levelsAdjustment" );
+                        list4.putObject( idlevelsAdjustment, desc237 );
+                    desc236.putList( idadjustment, list4 );
+                var idlevels = stringIDToTypeID( "levels" );
+                desc235.putObject( idto, idlevels, desc236 );
+            executeAction( idset, desc235, DialogModes.NO );
             break;
     }
 }
@@ -1523,6 +1758,10 @@ function formatSeconds(sec) {
     var minutes = Math.floor(sec / 60) - (hours * 60);
     var seconds = sec % 60;
     return Math.floor(hours).twoDigits() + ':' + Math.floor(minutes).twoDigits() + ':' + Math.floor(seconds).twoDigits();
+}
+
+function map(x,  in_min,  in_max,  out_min,  out_max) { // Map values as in arduino
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 function saveAsJPG(folder, name) {
