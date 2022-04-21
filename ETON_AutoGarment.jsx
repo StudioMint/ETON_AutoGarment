@@ -20,9 +20,10 @@ var minimumSteps = 8; // Steps of gradually adding Minimum
 minimumFilter = minimumFilter / minimumSteps;
 var caCrossSize = 30; // Content aware square size
 var vibranceLyr = true; // Creates a Vibrance layer instead of desaturate()
-var brightnessBlendCapReduction = 20; // Steps below the average value of brightness
-var gradientSteps = 5; // Max 5
+var brightnessBlendCapReduction = 30; // Steps below the average value of brightness, lower values usually gets darker
+var gradientSteps = 5; // Min 3, max 5
 var brightnessSteps = 1; // Max 3 (Max 1 atm bcuz tricky..)
+var rgbMultiplier = 0.5; // 0.39216 = 100 / 255 (To get percentage of 255) Higher number gets more saturated
 
 var samplesArrayRGB = [];
 var samplesArrayBrightness = [];
@@ -56,7 +57,11 @@ try {
     init();
     if (errorLog.length > 0 && troubleshoot) alert(errorLog);
 } catch(e) {
-    if (troubleshoot) alert("Error code " + e.number + " (line " + e.line + "):\n" + e);
+    if (troubleshoot) {
+        alert("Error code " + e.number + " (line " + e.line + "):\n" + e);
+    } else {
+        throw new Error("Error code " + e.number + " (line " + e.line + "):\n" + e, activeDocument.name.substring(0, activeDocument.name.length - 4), activeDocument.path);
+    }
 }
 
 // Reset the ruler
@@ -189,6 +194,7 @@ function main() {
     ///////// CAP, WHITE POINT AND WEIGHT /////////
     ///////////////////////////////////////////////
 
+    /*
     var histIndexRef;
     var histIndexGarm;
 
@@ -239,25 +245,25 @@ function main() {
     app.activeDocument.activeHistoryState = preWhitepoint;
     var whitePointAdjust = histIndexGarm - histIndexRef;
     if (troubleshoot) {
-        alert(histIndexRef);
-        alert(histIndexGarm);
-        alert(histIndexGarm - histIndexRef);
+        alert("White point troubleshoot:\nReference: " + histIndexRef + "\nModel: " + histIndexGarm + "\nDifference: " + (histIndexGarm - histIndexRef));
     }
+    */
     
     // Create Samples Garment
     lyr_GrpSamplesGarm = activeDocument.layerSets.add();
     lyr_GrpSamplesGarm.name = "Auto - Samples Garment";
     activeDocument.activeLayer = lyr_GrpSamplesGarm;
     functionLayerColour("none");
+    lyr_GrpSamplesGarm.artLayers.add();
+    var lyr_DummyGarm = activeDocument.activeLayer;
+    lyr_DummyGarm.name = "Dummy";
 
+    /*
     // Create levels adjustment layer
     createLevels();
     var lyr_Levels = activeDocument.activeLayer;
     lyr_Levels.name = "Garment white point";
     deleteMask();
-    lyr_GrpSamplesGarm.artLayers.add();
-    var lyr_UnderLevels = activeDocument.activeLayer;
-    moveLayerUpOrDown("Down");
 
     activeDocument.activeLayer = lyr_Levels;
     adjustLevels("whiteblackpoint", [0, 255 - whitePointAdjust]);
@@ -275,6 +281,7 @@ function main() {
     var lyr_AutoGarm = activeDocument.activeLayer;
 
     lyr_Levels.visible = false;
+    */
 
     // Create sampler check layer
     lyr_SamplerCheck = activeDocument.artLayers.add();
@@ -387,7 +394,8 @@ function main() {
     app.displayDialogs = DialogModes.NO;
     
     // Brightness swatches for garment
-    activeDocument.activeLayer = lyr_UnderLevels;
+    activeDocument.activeLayer = lyr_DummyGarm;
+    lyr_GrpSamplesGarm.artLayers.add();
     var sampleSize = 10;
     var sampleStartX = 0;
     var sampleStartY = 0;
@@ -472,6 +480,7 @@ function main() {
     activeDocument.activeLayer = grp_Temp;
     grp_Temp.merge();
     var lyr_AutoGarmTemp = activeDocument.activeLayer;
+    lyr_AutoGarmTemp.name = "Auto - Garment (w/ brightness)";
     lyr_AutoGarm.visible = false;
     
     for (i = 0; i < gradientSteps; i++) {
@@ -485,8 +494,8 @@ function main() {
     }
 
     getWeight = false;
-    lyr_MatchGrp.remove();
-    grp_Garment.filterMaskFeather = garmentMaskFeather;
+    lyr_AutoGarmTemp.visible = false;
+    lyr_MatchGrp.visible = false;
 
     //////////////////////////////////
     ///////// SWATCHES - RGB /////////
@@ -535,15 +544,23 @@ function main() {
         blendIf([0, 0], [255, 255], [blendIfSpan * i, blendIfSpan * i], [blendIfSpan * (i + 1), blendIfSpan * (i + 1)]);
     }
 
-    lyr_Levels.visible = true;
-    lyr_Levels.move(grp_Garment, ElementPlacement.INSIDE);
+    // lyr_Levels.visible = true;
+    // lyr_Levels.move(grp_Garment, ElementPlacement.INSIDE);
     lyr_Curves.move(grp_Garment, ElementPlacement.INSIDE);
     app.refresh();
     
     // Adjust Channel Mixers
     activeDocument.activeLayer = lyr_GrpSamplesGarm;
     for (i = 0; i < gradientSteps; i++) {
-        adjustRgbToMatch(chMxArray[i], samplesArrayRGB[i], samplesArrayRGB[gradientSteps + i]);
+        activeDocument.activeLayer = lyr_SamplerCheck;
+        var diffR = (samplesArrayRGB[gradientSteps + i].color.rgb.red - samplesArrayRGB[i].color.rgb.red) * rgbMultiplier;
+        var diffG = (samplesArrayRGB[gradientSteps + i].color.rgb.green - samplesArrayRGB[i].color.rgb.green) * rgbMultiplier;
+        var diffB = (samplesArrayRGB[gradientSteps + i].color.rgb.blue - samplesArrayRGB[i].color.rgb.blue) * rgbMultiplier;
+        activeDocument.activeLayer = chMxArray[i];
+        adjustChannelMixer("red", 100 + diffR);
+        adjustChannelMixer("green", 100 + diffG);
+        adjustChannelMixer("blue", 100 + diffB);
+        // adjustRgbToMatch(chMxArray[i], samplesArrayRGB[i], samplesArrayRGB[gradientSteps + i]);
     }
 
     // Move layers to Garment group
@@ -552,7 +569,7 @@ function main() {
     }
 
     // Clean-up
-    lyr_SamplerCheck.remove();
+    lyr_DummyGarm.remove();
     if (!troubleshoot) {
         activeDocument.colorSamplers.removeAll();
         lyr_GrpSamplesGarm.remove();
@@ -560,11 +577,11 @@ function main() {
         grp_Ref.visible = showEndMatchRef;
     }
 
-    /////////////////////////////////////
-    ///////// ADDITIONAL LAYERS /////////
-    /////////////////////////////////////
+    ////////////////////////////////////////
+    ///////// OPACITY AND VIBRANCE /////////
+    ////////////////////////////////////////
 
-    // Set weight and add vibrance layers
+    // Set opacity and add vibrance layers
     var blendIfSpanGrad = blendIfSpan + (blendIfSpan / gradientSteps);
     for (i = 0; i < gradientSteps; i++) {
 
@@ -580,21 +597,7 @@ function main() {
         deleteMask();
         blendIf([0, 0], [255, 255], [blackLow, blackHigh], [whiteLow, whiteHigh]);
 
-        // function getBaseLog(x, y) {
-        //     return Math.log(y) / Math.log(x);
-        // }
-        // alert("Span #" + i + ":\nGarm " + spanWeightGarm[i] + "\nRef " + spanWeightRef[i]);
-        // TODO: The span weight in ref layer need to influence the opacity too (atm spanWeightRef[i] gets its values too low)
-        // This is a bit fucked.. needs to be able to go below 40%. A lot of shadows become grey due to the low cap on 40
-        // var weightGarm = ((getBaseLog(100, spanWeightGarm[i] * (1 + garmentSize)) * 100) / 3) * 2;
-        // if (!isFinite(weightGarm)) weightGarm = 10;
-        // alert(weightGarm)
-        // if (!weightGarm) weightGarm = 0;
-        // var weightGarm = (40 + spanWeightGarm[i] * (1 + garmentSize));
-        // var weightRef = (40 + spanWeightRef[i] * (1 + refSize));
-        // alert(i + " garm: " + spanWeightGarm[i])
-        // alert(i + " ref: " + spanWeightRef[i])
-        // var weightedOpacity = weightGarm;
+        // Set opacity
         var percentGarm = map(spanWeightGarm[i], 0.0, 255.0, 0.0, 100.0) + 10;
         var percentRef = map(spanWeightRef[i], 0.0, 255.0, 0.0, 100.0) + 10;
         var weightedOpacity = (percentGarm + percentRef) / 2;
@@ -623,6 +626,60 @@ function main() {
 
     }
 
+    //////////////////////////////////
+    ///////// RGB CORRECTION /////////
+    //////////////////////////////////
+
+    grp_Ref.visible = false;
+    lyr_MatchGrp.move(activeDocument.layers[0], ElementPlacement.PLACEAFTER);
+    
+    // ----- Create cutout for garment -----
+    activeDocument.activeLayer = grp_Garment.parent;
+    selectionFromMask();
+    activeDocument.selection.contract(new UnitValue (30, "px"));
+    activeDocument.selection.copy(true);
+    lyr_MatchGrp.visible = true;
+    var lyr_AutoGarmCorrection = activeDocument.paste();
+    lyr_AutoGarmCorrection.move(lyr_AutoRef, ElementPlacement.PLACEAFTER);
+    activeDocument.activeLayer.name = "Auto - Garment Correction";
+    alignCenter();
+
+    // Get RGB samples for Garment
+    var preBlendIf = app.activeDocument.activeHistoryState;
+    var correctionGarment = averageBlendIf([brightnessBlendCap, brightnessBlendCap], [255, 255], [0, 0], [255, 255]);
+    app.activeDocument.activeHistoryState = preBlendIf;
+
+    // Get RGB samples for Ref
+    lyr_AutoGarmCorrection.visible = false;
+    lyr_AutoRef.visible = true;
+    activeDocument.activeLayer = lyr_AutoRef;
+    var preBlendIf = app.activeDocument.activeHistoryState;
+    var correctionRef = averageBlendIf([0, 0], [255, 255], [0, 0], [255, 255]);
+    app.activeDocument.activeHistoryState = preBlendIf;
+
+    correctionDiff = [
+        (correctionRef[0] - correctionGarment[0]) * rgbMultiplier,
+        (correctionRef[1] - correctionGarment[1]) * rgbMultiplier,
+        (correctionRef[2] - correctionGarment[2]) * rgbMultiplier
+    ];
+
+    activeDocument.activeLayer = grp_Garment.layers[0];
+    createChannelMixer();
+    deleteMask();
+    activeDocument.activeLayer.name = "Colour Correction";
+    activeDocument.activeLayer.blendMode = BlendMode.COLORBLEND;
+    adjustChannelMixer("red", 100 + correctionDiff[0]);
+    adjustChannelMixer("green", 100 + correctionDiff[1]);
+    adjustChannelMixer("blue", 100 + correctionDiff[2]);
+
+    if (troubleshoot) alert("Brightness blend cap: " + brightnessBlendCap);
+    lyr_MatchGrp.remove();
+    lyr_SamplerCheck.remove();
+
+    /////////////////////////////////////
+    ///////// ADDITIONAL LAYERS /////////
+    /////////////////////////////////////
+    
     if (addAdditional) {
         // Add "Raise Black Point" adjustment layer
         activeDocument.activeLayer = lyr_Curves;
@@ -656,6 +713,8 @@ function main() {
         grp_Ref.visible = showEndMatchRef;
     }
 
+    grp_Garment.filterMaskFeather = garmentMaskFeather;
+
 }
 
 // FUNCTIONS
@@ -670,7 +729,6 @@ function adjustRgbToMatch(lyr, sampleA, sampleB) {
 
     var timeout = timeoutStart;
     var startValue = startValueStart;
-
     if (sampleA.color.rgb.red < sampleB.color.rgb.red) {
         while (sampleA.color.rgb.red < sampleB.color.rgb.red) {
             activeDocument.activeLayer = lyr;
@@ -1774,4 +1832,14 @@ function saveAsJPG(folder, name) {
     jpgSaveOptions.quality = 8;
     activeDocument.saveAs(jpgFile, jpgSaveOptions, true, Extension.LOWERCASE);
     return jpgFile;
+}
+
+function saveTxt(text, name, path, ext) {
+    if (!ext) ext = ".txt";
+    var saveFile = File(Folder(path) + "/" + name + ext);
+    if (saveFile.exists) saveFile.remove();
+    saveFile.encoding = "UTF8";
+    saveFile.open("e", "TEXT", "????");
+    saveFile.writeln(text);
+    saveFile.close();
 }
