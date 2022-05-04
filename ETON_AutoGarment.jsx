@@ -49,7 +49,7 @@ var getWeight = false;
 
 var troubleshoot = false;
 var showEndMatchRef = false;
-var saveJpgCheckFile = true;
+var saveJpgCheckFile = false;
 var skipPopulated = true;
 var errorLog = [];
 
